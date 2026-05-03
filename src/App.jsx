@@ -38,6 +38,7 @@ function parseExifGPS(file) {
     const reader = new FileReader();
     reader.onload = (e) => {
       const view = new DataView(e.target.result);
+      if (isHeicFile(file, view)) return resolve(parseHeicGPS(view));
       if (view.getUint16(0) !== 0xffd8) return resolve(null);
       let offset = 2;
       while (offset < view.byteLength - 1) {
@@ -48,6 +49,135 @@ function parseExifGPS(file) {
     };
     reader.readAsArrayBuffer(file);
   });
+}
+function isHeicFile(file, view) {
+  const name = file.name?.toLowerCase() || "";
+  if (name.endsWith(".heic") || name.endsWith(".heif")) return true;
+  if (file.type === "image/heic" || file.type === "image/heif") return true;
+  return view.byteLength > 12 && readAscii(view, 4, 4) === "ftyp" && /hei[cfxs]|mif1|msf1/.test(readAscii(view, 8, 4));
+}
+function readAscii(view, offset, len) {
+  if (offset < 0 || offset + len > view.byteLength) return "";
+  let s = "";
+  for (let i = 0; i < len; i++) s += String.fromCharCode(view.getUint8(offset + i));
+  return s;
+}
+function parseHeicGPS(view) {
+  try {
+    const meta = findBox(view, 0, view.byteLength, "meta");
+    if (!meta) return null;
+    const metaStart = meta.start + meta.header + 4;
+    const exifItems = readIinfExifItems(view, metaStart, meta.end);
+    const extents = readIlocExtents(view, metaStart, meta.end);
+    for (const id of exifItems) {
+      const payload = extents.get(id);
+      if (!payload) continue;
+      const gps = parseExifPayload(view, payload.offset, payload.length);
+      if (gps) return gps;
+    }
+  } catch { return null; }
+  return null;
+}
+function findBox(view, start, end, type) {
+  for (const box of readBoxes(view, start, end)) if (box.type === type) return box;
+  return null;
+}
+function readBoxes(view, start, end) {
+  const boxes = [];
+  let pos = start;
+  while (pos + 8 <= end && pos + 8 <= view.byteLength) {
+    let size = view.getUint32(pos);
+    const type = readAscii(view, pos + 4, 4);
+    let header = 8;
+    if (size === 1) {
+      if (pos + 16 > view.byteLength) break;
+      size = Number(view.getBigUint64(pos + 8));
+      header = 16;
+    } else if (size === 0) {
+      size = end - pos;
+    }
+    if (!size || pos + size > end || pos + size > view.byteLength) break;
+    boxes.push({ type, start: pos, end: pos + size, header });
+    pos += size;
+  }
+  return boxes;
+}
+function readIinfExifItems(view, start, end) {
+  const iinf = findBox(view, start, end, "iinf");
+  const ids = new Set();
+  if (!iinf) return ids;
+  const version = view.getUint8(iinf.start + iinf.header);
+  let pos = iinf.start + iinf.header + 4;
+  const count = version === 0 ? view.getUint16(pos) : view.getUint32(pos);
+  pos += version === 0 ? 2 : 4;
+  const entries = readBoxes(view, pos, iinf.end);
+  for (const entry of entries.slice(0, count)) {
+    if (entry.type !== "infe") continue;
+    const v = view.getUint8(entry.start + entry.header);
+    let p = entry.start + entry.header + 4;
+    const itemId = v >= 3 ? view.getUint32(p) : view.getUint16(p);
+    p += v >= 3 ? 4 : 2;
+    p += 2;
+    if (v >= 2 && readAscii(view, p, 4) === "Exif") ids.add(itemId);
+  }
+  return ids;
+}
+function readIlocExtents(view, start, end) {
+  const iloc = findBox(view, start, end, "iloc");
+  const result = new Map();
+  if (!iloc) return result;
+  const version = view.getUint8(iloc.start + iloc.header);
+  let pos = iloc.start + iloc.header + 4;
+  const sizes1 = view.getUint8(pos++), sizes2 = view.getUint8(pos++);
+  const offsetSize = sizes1 >> 4, lengthSize = sizes1 & 15, baseOffsetSize = sizes2 >> 4;
+  const indexSize = version === 1 || version === 2 ? sizes2 & 15 : 0;
+  const itemCount = version < 2 ? view.getUint16(pos) : view.getUint32(pos);
+  pos += version < 2 ? 2 : 4;
+  for (let i = 0; i < itemCount; i++) {
+    const itemId = version < 2 ? view.getUint16(pos) : view.getUint32(pos);
+    pos += version < 2 ? 2 : 4;
+    if (version === 1 || version === 2) pos += 2;
+    pos += 2;
+    const baseOffset = readUint(view, pos, baseOffsetSize);
+    pos += baseOffsetSize;
+    const extentCount = view.getUint16(pos);
+    pos += 2;
+    let totalLength = 0;
+    let firstOffset = null;
+    for (let j = 0; j < extentCount; j++) {
+      if (indexSize) pos += indexSize;
+      const extentOffset = readUint(view, pos, offsetSize);
+      pos += offsetSize;
+      const extentLength = readUint(view, pos, lengthSize);
+      pos += lengthSize;
+      if (firstOffset === null) firstOffset = baseOffset + extentOffset;
+      totalLength += extentLength;
+    }
+    if (firstOffset !== null && totalLength > 0) result.set(itemId, { offset: firstOffset, length: totalLength });
+  }
+  return result;
+}
+function readUint(view, offset, size) {
+  if (size === 0) return 0;
+  if (size === 1) return view.getUint8(offset);
+  if (size === 2) return view.getUint16(offset);
+  if (size === 4) return view.getUint32(offset);
+  if (size === 8) return Number(view.getBigUint64(offset));
+  return 0;
+}
+function parseExifPayload(view, offset, length) {
+  const end = Math.min(view.byteLength, offset + length);
+  for (let p = offset; p + 6 <= end; p++) {
+    if (readAscii(view, p, 4) === "Exif") return parseExif(view, p);
+    if (view.getUint16(p) === 0x4949 || view.getUint16(p) === 0x4d4d) {
+      const le = view.getUint16(p) === 0x4949;
+      if (view.getUint16(p + 2, le) === 42) {
+        const gpsOffset = findGPSIFD(view, p, p + view.getUint32(p + 4, le), le);
+        return gpsOffset ? readGPSData(view, p, gpsOffset, le) : null;
+      }
+    }
+  }
+  return null;
 }
 function parseExif(view, start) {
   const h = String.fromCharCode(view.getUint8(start), view.getUint8(start+1), view.getUint8(start+2), view.getUint8(start+3));
@@ -83,6 +213,10 @@ async function reverseGeocode(lat, lon) {
   } catch { return { city: "", country: "", display: `${lat.toFixed(2)}, ${lon.toFixed(2)}` }; }
 }
 function fileToBase64(file) { return new Promise((r) => { const rd = new FileReader(); rd.onload = () => r(rd.result); rd.readAsDataURL(file); }); }
+function isPhotoFile(file) {
+  const name = file.name?.toLowerCase() || "";
+  return file.type.startsWith("image/") || name.endsWith(".heic") || name.endsWith(".heif");
+}
 
 function LogoMark({ size = 42 }) {
   return (
@@ -636,7 +770,7 @@ export default function App() {
   const processFiles = useCallback(async (files) => {
     if (!user) return;
     setProcessing(true);
-    const imgs = Array.from(files).filter(f => f.type.startsWith("image/"));
+    const imgs = Array.from(files).filter(isPhotoFile);
     const np = [];
     for (const file of imgs) {
       const gps = await parseExifGPS(file);
@@ -795,7 +929,7 @@ export default function App() {
           {processing && <div style={{ position: "absolute", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 50, background: "rgba(15,15,15,0.92)", color: "#e8e6e1", padding: "12px 24px", borderRadius: 12, fontSize: 14, boxShadow: "0 4px 20px rgba(0,0,0,0.4)", display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{ width: 16, height: 16, border: "2px solid rgba(230,57,70,0.3)", borderTop: "2px solid #E63946", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />Reading GPS data...</div>}
 
-          <input ref={fileInputRef} type="file" multiple accept="image/*" style={{ display: "none" }} onChange={(e) => processFiles(e.target.files)} />
+          <input ref={fileInputRef} type="file" multiple accept="image/*,.heic,.heif" style={{ display: "none" }} onChange={(e) => processFiles(e.target.files)} />
         </div>
       </div>
 
