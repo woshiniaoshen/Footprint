@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
@@ -7,6 +7,20 @@ const supabase = createClient(
 );
 
 const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+
+const palette = {
+  ink: "#111827",
+  panel: "rgba(17,24,39,0.88)",
+  panelSoft: "rgba(255,255,255,0.075)",
+  line: "rgba(255,255,255,0.13)",
+  text: "#F7F3EA",
+  muted: "rgba(247,243,234,0.62)",
+  accent: "#FF6B4A",
+  accentDark: "#D94C30",
+  mint: "#42D9B8",
+  sky: "#5DADEC",
+  gold: "#F2C36B",
+};
 
 // ─── Geo Helpers ───
 function degToNum(lat, lon, zoom) {
@@ -43,7 +57,7 @@ function parseExif(view, start) {
   return go ? readGPSData(view, ts, go, le) : null;
 }
 function findGPSIFD(view, ts, is, le) {
-  try { const e = view.getUint16(is, le); for (let i = 0; i < e; i++) { const o = is + 2 + i * 12; if (view.getUint16(o, le) === 0x8825) return ts + view.getUint32(o + 8, le); } } catch (e) {} return null;
+  try { const e = view.getUint16(is, le); for (let i = 0; i < e; i++) { const o = is + 2 + i * 12; if (view.getUint16(o, le) === 0x8825) return ts + view.getUint32(o + 8, le); } } catch { return null; } return null;
 }
 function readGPSData(view, ts, gs, le) {
   try {
@@ -56,7 +70,7 @@ function readGPSData(view, ts, gs, le) {
       if (tag === 29) { let s = ""; for (let j = 0; j < 10; j++) s += String.fromCharCode(view.getUint8(vo + j)); ds = s; }
     }
     if (lat && lon) return { lat: (lat[0]+lat[1]/60+lat[2]/3600)*(lr==="S"?-1:1), lon: (lon[0]+lon[1]/60+lon[2]/3600)*(lnr==="W"?-1:1), date: ds };
-  } catch (e) {} return null;
+  } catch { return null; } return null;
 }
 function readR(v, o, le) { return [v.getUint32(o,le)/v.getUint32(o+4,le), v.getUint32(o+8,le)/v.getUint32(o+12,le), v.getUint32(o+16,le)/v.getUint32(o+20,le)]; }
 
@@ -69,6 +83,75 @@ async function reverseGeocode(lat, lon) {
   } catch { return { city: "", country: "", display: `${lat.toFixed(2)}, ${lon.toFixed(2)}` }; }
 }
 function fileToBase64(file) { return new Promise((r) => { const rd = new FileReader(); rd.onload = () => r(rd.result); rd.readAsDataURL(file); }); }
+
+function LogoMark({ size = 42 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 64 64" fill="none" aria-hidden="true">
+      <rect width="64" height="64" rx="16" fill="#111827" />
+      <path d="M16 39c6.6-9.8 12.1-15.4 16.6-16.9 4.8-1.6 10.2.4 15.9 6" stroke="#42D9B8" strokeWidth="4" strokeLinecap="round" />
+      <path d="M18 45c7.5-4.5 14.2-6.1 20.1-4.7 3.4.8 6.7 2.6 9.9 5.3" stroke="#F7F3EA" strokeWidth="4" strokeLinecap="round" />
+      <path d="M40 18c0 6.7-8 15.2-8 15.2S24 24.7 24 18a8 8 0 1 1 16 0Z" fill="#FF6B4A" />
+      <circle cx="32" cy="18" r="3" fill="#F7F3EA" />
+      <path d="M47 18l2.3 4.6 5.1.8-3.7 3.6.9 5.1-4.6-2.4-4.6 2.4.9-5.1-3.7-3.6 5.1-.8L47 18Z" fill="#F2C36B" />
+    </svg>
+  );
+}
+
+function BrandLockup({ align = "center", titleSize = 32, compact = false }) {
+  return (
+    <div style={{
+      display: "flex",
+      alignItems: "center",
+      justifyContent: align === "center" ? "center" : "flex-start",
+      gap: 12,
+      textAlign: align,
+    }}>
+      <LogoMark size={compact ? 38 : 50} />
+      <div>
+        <h1 style={{
+          fontFamily: "'Playfair Display', serif",
+          fontSize: titleSize,
+          lineHeight: 1,
+          fontWeight: 800,
+          margin: 0,
+          color: palette.text,
+        }}>Footprint</h1>
+        <p style={{ margin: "6px 0 0", fontSize: compact ? 10 : 12, opacity: 0.58, letterSpacing: "0.8px", color: palette.muted }}>YOUR TRAVEL STORY, MAPPED</p>
+      </div>
+    </div>
+  );
+}
+
+function ProfileLightbox({ profile, user, onClose }) {
+  if (!profile) return null;
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, zIndex: 1100, background: "rgba(6,10,18,0.78)",
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
+      backdropFilter: "blur(14px)", cursor: "zoom-out",
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        width: "min(440px, 92vw)", padding: 28, borderRadius: 24,
+        background: "linear-gradient(180deg, rgba(255,255,255,0.13), rgba(255,255,255,0.06))",
+        border: `1px solid ${palette.line}`, boxShadow: "0 28px 80px rgba(0,0,0,0.48)",
+        textAlign: "center", color: palette.text,
+      }}>
+        <div style={{
+          width: "min(280px, 70vw)", height: "min(280px, 70vw)", margin: "0 auto 20px",
+          borderRadius: "50%", background: profile.avatar_url ? `url(${profile.avatar_url}) center/cover` : `linear-gradient(135deg, ${palette.accent}, ${palette.sky})`,
+          border: "6px solid rgba(255,255,255,0.18)", display: "flex", alignItems: "center",
+          justifyContent: "center", fontSize: 92, fontWeight: 800, color: "white",
+          boxShadow: "0 22px 60px rgba(0,0,0,0.35)",
+        }}>
+          {!profile.avatar_url && (profile.username?.charAt(0).toUpperCase() || "?")}
+        </div>
+        <div style={{ fontSize: 22, fontWeight: 800 }}>@{profile.username}</div>
+        <div style={{ fontSize: 13, color: palette.muted, marginTop: 4 }}>{user?.email}</div>
+        <button onClick={onClose} style={{ ...secondaryBtnStyle, marginTop: 22, width: "100%" }}>Close</button>
+      </div>
+    </div>
+  );
+}
 
 // ─── Image Lightbox ───
 function Lightbox({ pin, onClose }) {
@@ -135,7 +218,7 @@ function AuthScreen({ onAuth }) {
     <div style={authContainerStyle}>
       <Fonts />
       <div style={authCardStyle}>
-        <div style={{ fontSize: 48, marginBottom: 16, textAlign: "center" }}>📧</div>
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}><LogoMark size={52} /></div>
         <h2 style={{ ...authTitleStyle, fontSize: 22 }}>Check your email</h2>
         <p style={{ opacity: 0.5, fontSize: 14, textAlign: "center", lineHeight: 1.6 }}>
           We sent a confirmation link to <strong>{email}</strong>. Click the link, then come back and log in.
@@ -148,12 +231,9 @@ function AuthScreen({ onAuth }) {
   return (
     <div style={authContainerStyle}>
       <Fonts />
-      <div style={{ position: "fixed", top: "-20%", right: "-10%", width: "50vw", height: "50vw", background: "radial-gradient(circle, rgba(230,57,70,0.08) 0%, transparent 70%)", pointerEvents: "none" }} />
       <div style={authCardStyle}>
         <div style={{ textAlign: "center", marginBottom: 32 }}>
-          <div style={{ fontSize: 40, marginBottom: 12 }}>🌍</div>
-          <h1 style={{ fontFamily: "'Playfair Display', serif", fontSize: 32, fontWeight: 800, margin: 0, background: "linear-gradient(135deg, #e8e6e1 0%, #a8a29e 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Footprint</h1>
-          <p style={{ margin: "6px 0 0", fontSize: 12, opacity: 0.4, letterSpacing: "1px" }}>YOUR TRAVEL STORY, MAPPED</p>
+          <BrandLockup />
         </div>
         <h2 style={authTitleStyle}>{isLogin ? "Welcome back" : "Create account"}</h2>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -398,9 +478,11 @@ function SlippyMap({ pins, center, zoom, onPinClick }) {
   const dragMoved = useRef(false);
   const lastPos = useRef({ x: 0, y: 0 });
   const [mapState, setMapState] = useState({ center, zoom });
+  const [isDragging, setIsDragging] = useState(false);
   const [size, setSize] = useState({ w: 600, h: 400 });
   const [hoveredPin, setHoveredPin] = useState(null);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { setMapState({ center, zoom }); }, [center, zoom]);
   useEffect(() => {
     const el = containerRef.current; if (!el) return;
@@ -422,7 +504,7 @@ function SlippyMap({ pins, center, zoom, onPinClick }) {
   }
   const pinPos = pins.map((p) => { const pp = degToNum(p.lat, p.lon, z); return { ...p, x: pp.x * tileSize - tlPX, y: pp.y * tileSize - tlPY }; });
 
-  const handlePointerDown = (e) => { dragging.current = true; dragMoved.current = false; lastPos.current = { x: e.clientX, y: e.clientY }; e.currentTarget.setPointerCapture(e.pointerId); };
+  const handlePointerDown = (e) => { dragging.current = true; setIsDragging(true); dragMoved.current = false; lastPos.current = { x: e.clientX, y: e.clientY }; e.currentTarget.setPointerCapture(e.pointerId); };
   const handlePointerMove = (e) => {
     if (!dragging.current) return;
     const dx = e.clientX - lastPos.current.x, dy = e.clientY - lastPos.current.y;
@@ -430,11 +512,11 @@ function SlippyMap({ pins, center, zoom, onPinClick }) {
     lastPos.current = { x: e.clientX, y: e.clientY };
     setMapState((prev) => { const c2 = degToNum(prev.center.lat, prev.center.lon, prev.zoom); const nc = numToDeg(c2.x - dx / tileSize, c2.y - dy / tileSize, prev.zoom); return { ...prev, center: { lat: nc.lat, lon: nc.lon } }; });
   };
-  const handlePointerUp = () => { dragging.current = false; };
+  const handlePointerUp = () => { dragging.current = false; setIsDragging(false); };
   const handleWheel = (e) => { e.preventDefault(); setMapState((p) => ({ ...p, zoom: Math.max(1, Math.min(18, p.zoom + (e.deltaY > 0 ? -1 : 1))) })); };
 
   return (
-    <div ref={containerRef} style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden", cursor: dragging.current ? "grabbing" : "grab", touchAction: "none", borderRadius: "16px" }}
+    <div ref={containerRef} style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden", cursor: isDragging ? "grabbing" : "grab", touchAction: "none", borderRadius: "16px" }}
       onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onWheel={handleWheel}>
       {tiles.map((t) => <img key={t.key} src={t.url} alt="" style={{ position: "absolute", left: t.left, top: t.top, width: tileSize, height: tileSize, pointerEvents: "none" }} draggable={false} />)}
       {pinPos.map((p, i) => (
@@ -466,14 +548,15 @@ function SlippyMap({ pins, center, zoom, onPinClick }) {
   );
 }
 
-const zoomBtnStyle = { width: 36, height: 36, border: "none", borderRadius: 10, background: "rgba(255,255,255,0.92)", cursor: "pointer", fontSize: 20, fontWeight: 700, color: "#333", boxShadow: "0 2px 8px rgba(0,0,0,0.15)", display: "flex", alignItems: "center", justifyContent: "center" };
+const zoomBtnStyle = { width: 36, height: 36, border: "none", borderRadius: 10, background: "rgba(255,255,255,0.94)", cursor: "pointer", fontSize: 20, fontWeight: 700, color: palette.ink, boxShadow: "0 2px 10px rgba(17,24,39,0.18)", display: "flex", alignItems: "center", justifyContent: "center" };
 
 // ─── Styles ───
-const authContainerStyle = { width: "100%", minHeight: "100vh", fontFamily: "'DM Sans', sans-serif", background: "linear-gradient(160deg, #0a0a0f 0%, #12121f 40%, #0f1923 100%)", color: "#e8e6e1", display: "flex", alignItems: "center", justifyContent: "center", position: "relative", overflow: "hidden" };
-const authCardStyle = { width: "100%", maxWidth: 400, padding: "40px 36px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 20, backdropFilter: "blur(12px)", position: "relative", zIndex: 10 };
+const authContainerStyle = { width: "100%", minHeight: "100vh", fontFamily: "'DM Sans', sans-serif", background: "linear-gradient(145deg, #101827 0%, #17243A 42%, #22312C 100%)", color: palette.text, display: "flex", alignItems: "center", justifyContent: "center", position: "relative", overflow: "hidden", padding: 20 };
+const authCardStyle = { width: "min(420px, calc(100vw - 40px))", maxWidth: 420, padding: "40px 36px", background: "linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0.055))", border: `1px solid ${palette.line}`, borderRadius: 24, backdropFilter: "blur(14px)", position: "relative", zIndex: 10, boxShadow: "0 26px 80px rgba(0,0,0,0.32)", boxSizing: "border-box" };
 const authTitleStyle = { fontFamily: "'DM Sans', sans-serif", fontSize: 18, fontWeight: 600, margin: "0 0 20px", textAlign: "center", opacity: 0.8 };
-const inputStyle = { width: "100%", padding: "14px 16px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, color: "#e8e6e1", fontSize: 14, fontFamily: "'DM Sans', sans-serif", outline: "none", boxSizing: "border-box" };
-const authBtnStyle = { width: "100%", padding: "14px", background: "#E63946", color: "white", border: "none", borderRadius: 12, fontSize: 15, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", boxShadow: "0 4px 20px rgba(230,57,70,0.3)" };
+const inputStyle = { width: "100%", padding: "14px 16px", background: "rgba(255,255,255,0.085)", border: `1px solid ${palette.line}`, borderRadius: 14, color: palette.text, fontSize: 14, fontFamily: "'DM Sans', sans-serif", outline: "none", boxSizing: "border-box" };
+const authBtnStyle = { width: "100%", padding: "14px", background: `linear-gradient(135deg, ${palette.accent}, ${palette.accentDark})`, color: "white", border: "none", borderRadius: 14, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", boxShadow: "0 12px 28px rgba(255,107,74,0.28)" };
+const secondaryBtnStyle = { padding: "12px 16px", background: "rgba(255,255,255,0.09)", color: palette.text, border: `1px solid ${palette.line}`, borderRadius: 14, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif" };
 
 function Fonts() { return <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet" />; }
 
@@ -484,6 +567,7 @@ export default function App() {
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [needsUsername, setNeedsUsername] = useState(false);
   const [showEditProfile, setShowEditProfile] = useState(false);
+  const [showProfilePreview, setShowProfilePreview] = useState(false);
   const [lightboxPin, setLightboxPin] = useState(null);
   const [pins, setPins] = useState([]);
   const [processing, setProcessing] = useState(false);
@@ -491,10 +575,14 @@ export default function App() {
   const [center, setCenter] = useState({ lat: 1.35, lon: 103.82 });
   const [zoom, setZoom] = useState(3);
   const [selectedPin, setSelectedPin] = useState(null);
-  const [stats, setStats] = useState({ countries: 0, cities: 0 });
   const [loading, setLoading] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const fileInputRef = useRef(null);
+
+  const stats = useMemo(() => ({
+    countries: new Set(pins.map(p => p.country).filter(Boolean)).size,
+    cities: new Set(pins.map(p => p.city).filter(Boolean)).size,
+  }), [pins]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -509,6 +597,7 @@ export default function App() {
 
   // Load profile when user logs in
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!user) { setProfile(null); setNeedsUsername(false); setPins([]); return; }
     async function loadProfile() {
       const { data, error } = await supabase.from("profiles").select("*").eq("id", user.id).single();
@@ -534,11 +623,7 @@ export default function App() {
     loadPins();
   }, [user, needsUsername]);
 
-  useEffect(() => {
-    setStats({ countries: new Set(pins.map(p => p.country).filter(Boolean)).size, cities: new Set(pins.map(p => p.city).filter(Boolean)).size });
-  }, [pins]);
-
-  const fitMapToPins = (all) => {
+  function fitMapToPins(all) {
     if (all.length === 1) { setCenter({ lat: all[0].lat, lon: all[0].lon }); setZoom(10); }
     else if (all.length > 1) {
       const lats = all.map(p => p.lat), lons = all.map(p => p.lon);
@@ -546,7 +631,7 @@ export default function App() {
       const d = Math.max(Math.max(...lats) - Math.min(...lats), Math.max(...lons) - Math.min(...lons));
       setZoom(d > 100 ? 2 : d > 50 ? 3 : d > 20 ? 4 : d > 5 ? 6 : d > 1 ? 8 : 11);
     }
-  };
+  }
 
   const processFiles = useCallback(async (files) => {
     if (!user) return;
@@ -590,39 +675,37 @@ export default function App() {
   if (needsUsername) return <UsernameSetup user={user} onComplete={(p) => { setProfile({ id: user.id, ...p }); setNeedsUsername(false); }} />;
 
   return (
-    <div style={{ width: "100%", minHeight: "100vh", fontFamily: "'DM Sans', sans-serif", background: "linear-gradient(160deg, #0a0a0f 0%, #12121f 40%, #0f1923 100%)", color: "#e8e6e1", position: "relative", overflow: "hidden" }}>
+    <div style={{ width: "100%", minHeight: "100vh", fontFamily: "'DM Sans', sans-serif", background: "linear-gradient(145deg, #101827 0%, #17243A 42%, #22312C 100%)", color: palette.text, position: "relative", overflow: "hidden" }}>
       <Fonts />
-      <div style={{ position: "fixed", top: "-20%", right: "-10%", width: "50vw", height: "50vw", background: "radial-gradient(circle, rgba(230,57,70,0.06) 0%, transparent 70%)", pointerEvents: "none", zIndex: 0 }} />
 
       {/* Lightbox */}
       <Lightbox pin={lightboxPin} onClose={() => setLightboxPin(null)} />
+      <ProfileLightbox profile={showProfilePreview ? profile : null} user={user} onClose={() => setShowProfilePreview(false)} />
 
       {/* Edit Profile */}
       {showEditProfile && profile && <EditProfile profile={profile} onSave={(p) => { setProfile(p); setShowEditProfile(false); }} onClose={() => setShowEditProfile(false)} />}
 
       {/* Header */}
-      <header style={{ padding: "16px 28px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "relative", zIndex: 10, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-        <div>
-          <h1 style={{ fontFamily: "'Playfair Display', serif", fontSize: 26, fontWeight: 800, margin: 0, background: "linear-gradient(135deg, #e8e6e1 0%, #a8a29e 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Footprint</h1>
-          <p style={{ margin: "2px 0 0", fontSize: 12, opacity: 0.4, letterSpacing: "0.5px" }}>YOUR TRAVEL STORY, MAPPED</p>
-        </div>
+      <header style={{ padding: "14px 28px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "relative", zIndex: 10, borderBottom: `1px solid ${palette.line}`, background: "rgba(17,24,39,0.72)", backdropFilter: "blur(18px)" }}>
+        <BrandLockup align="left" titleSize={26} compact />
 
         <div style={{ display: "flex", gap: 20, alignItems: "center" }}>
           {pins.length > 0 && <>
-            <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 700, color: "#E63946" }}>{stats.countries}</div><div style={{ fontSize: 9, opacity: 0.4, letterSpacing: "1px" }}>COUNTRIES</div></div>
-            <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 700, color: "#E63946" }}>{stats.cities}</div><div style={{ fontSize: 9, opacity: 0.4, letterSpacing: "1px" }}>CITIES</div></div>
-            <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 700, color: "#E63946" }}>{pins.length}</div><div style={{ fontSize: 9, opacity: 0.4, letterSpacing: "1px" }}>PHOTOS</div></div>
-            <button onClick={clearAll} style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "#e8e6e1", padding: "6px 14px", borderRadius: 8, cursor: "pointer", fontSize: 11, fontFamily: "'DM Sans', sans-serif" }}>Clear All</button>
+            <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800, color: palette.mint }}>{stats.countries}</div><div style={{ fontSize: 9, opacity: 0.5, letterSpacing: "1px" }}>COUNTRIES</div></div>
+            <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800, color: palette.gold }}>{stats.cities}</div><div style={{ fontSize: 9, opacity: 0.5, letterSpacing: "1px" }}>CITIES</div></div>
+            <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800, color: palette.sky }}>{pins.length}</div><div style={{ fontSize: 9, opacity: 0.5, letterSpacing: "1px" }}>PHOTOS</div></div>
+            <button onClick={clearAll} style={secondaryBtnStyle}>Clear All</button>
           </>}
 
           {/* User avatar & dropdown */}
           <div style={{ position: "relative", paddingLeft: pins.length > 0 ? 12 : 0, borderLeft: pins.length > 0 ? "1px solid rgba(255,255,255,0.1)" : "none" }}>
-            <div onClick={() => setShowUserMenu(!showUserMenu)} style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", padding: "4px 8px", borderRadius: 12, background: showUserMenu ? "rgba(255,255,255,0.06)" : "transparent", transition: "background 0.2s" }}>
-              <div style={{
+            <div onClick={() => setShowUserMenu(!showUserMenu)} style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", padding: "5px 9px", borderRadius: 16, background: showUserMenu ? "rgba(255,255,255,0.09)" : "transparent", transition: "background 0.2s" }}>
+              <div onClick={(e) => { e.stopPropagation(); setShowUserMenu(false); setShowProfilePreview(true); }} title="View profile picture" style={{
                 width: 36, height: 36, borderRadius: "50%", flexShrink: 0,
-                background: profile?.avatar_url ? `url(${profile.avatar_url}) center/cover` : "#E63946",
+                background: profile?.avatar_url ? `url(${profile.avatar_url}) center/cover` : `linear-gradient(135deg, ${palette.accent}, ${palette.sky})`,
                 display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: 15, fontWeight: 700, color: "white", border: "2px solid rgba(255,255,255,0.15)",
+                fontSize: 15, fontWeight: 800, color: "white", border: "2px solid rgba(255,255,255,0.22)",
+                boxShadow: "0 0 0 3px rgba(66,217,184,0.12)", cursor: "zoom-in",
               }}>
                 {!profile?.avatar_url && (profile?.username?.charAt(0).toUpperCase() || "?")}
               </div>
@@ -636,15 +719,15 @@ export default function App() {
             {showUserMenu && (
               <div style={{
                 position: "absolute", top: "calc(100% + 8px)", right: 0, width: 200,
-                background: "rgba(20,20,30,0.95)", border: "1px solid rgba(255,255,255,0.1)",
-                borderRadius: 14, overflow: "hidden", boxShadow: "0 8px 30px rgba(0,0,0,0.4)",
+                background: "rgba(17,24,39,0.96)", border: `1px solid ${palette.line}`,
+                borderRadius: 16, overflow: "hidden", boxShadow: "0 18px 46px rgba(0,0,0,0.38)",
                 backdropFilter: "blur(12px)", zIndex: 100,
               }}>
                 <button onClick={() => { setShowEditProfile(true); setShowUserMenu(false); }} style={menuItemStyle}>
                   <span>✎</span> Edit Profile
                 </button>
                 <div style={{ height: 1, background: "rgba(255,255,255,0.06)" }} />
-                <button onClick={() => { handleLogout(); setShowUserMenu(false); }} style={{ ...menuItemStyle, color: "#E63946" }}>
+                <button onClick={() => { handleLogout(); setShowUserMenu(false); }} style={{ ...menuItemStyle, color: palette.accent }}>
                   <span>↩</span> Log Out
                 </button>
               </div>
@@ -695,17 +778,17 @@ export default function App() {
 
           {!loading && pins.length === 0 && !processing && (
             <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 20, background: "rgba(10,10,15,0.7)", backdropFilter: "blur(4px)" }}>
-              <div style={{ textAlign: "center", padding: 48, border: "2px dashed rgba(255,255,255,0.15)", borderRadius: 24, background: "rgba(255,255,255,0.03)", maxWidth: 420 }}>
-                <div style={{ fontSize: 56, marginBottom: 16 }}>🌍</div>
+              <div style={{ textAlign: "center", padding: 48, border: `2px dashed ${palette.line}`, borderRadius: 24, background: "rgba(255,255,255,0.055)", maxWidth: 420, boxShadow: "0 22px 70px rgba(0,0,0,0.22)" }}>
+                <div style={{ display: "flex", justifyContent: "center", marginBottom: 18 }}><LogoMark size={64} /></div>
                 <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 26, fontWeight: 800, margin: "0 0 8px" }}>Drop your photos here</h2>
                 <p style={{ fontSize: 14, opacity: 0.5, margin: "0 0 24px", lineHeight: 1.6 }}>Upload photos with GPS data and watch<br />your travels appear on the map</p>
-                <button onClick={() => fileInputRef.current?.click()} style={{ background: "#E63946", color: "white", border: "none", padding: "14px 36px", borderRadius: 12, fontSize: 15, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", boxShadow: "0 4px 20px rgba(230,57,70,0.3)", transition: "transform 0.2s ease" }}
+                <button onClick={() => fileInputRef.current?.click()} style={{ ...authBtnStyle, width: "auto", padding: "14px 36px", transition: "transform 0.2s ease" }}
                   onMouseEnter={e => e.target.style.transform = "scale(1.05)"} onMouseLeave={e => e.target.style.transform = "scale(1)"}>Choose Photos</button>
               </div>
             </div>
           )}
 
-          {pins.length > 0 && <button onClick={() => fileInputRef.current?.click()} style={{ position: "absolute", top: 16, left: 16, zIndex: 30, background: "rgba(230,57,70,0.92)", color: "white", border: "none", padding: "10px 20px", borderRadius: 12, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", boxShadow: "0 4px 16px rgba(230,57,70,0.3)", display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontSize: 18 }}>+</span> Add Photos</button>}
+          {pins.length > 0 && <button onClick={() => fileInputRef.current?.click()} style={{ position: "absolute", top: 16, left: 16, zIndex: 30, background: `linear-gradient(135deg, ${palette.accent}, ${palette.accentDark})`, color: "white", border: "none", padding: "10px 20px", borderRadius: 14, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", boxShadow: "0 12px 28px rgba(255,107,74,0.25)", display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontSize: 18 }}>+</span> Add Photos</button>}
 
           {dragOver && <div style={{ position: "absolute", inset: 0, zIndex: 40, background: "rgba(230,57,70,0.15)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", border: "3px dashed #E63946", borderRadius: 16, margin: 8 }}><div style={{ fontSize: 22, fontWeight: 700, color: "#E63946" }}>Drop photos here</div></div>}
 
