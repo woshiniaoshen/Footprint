@@ -217,6 +217,39 @@ function isPhotoFile(file) {
   const name = file.name?.toLowerCase() || "";
   return file.type.startsWith("image/") || name.endsWith(".heic") || name.endsWith(".heif");
 }
+function isHeicLike(file) {
+  const name = file.name?.toLowerCase() || "";
+  return file.type === "image/heic" || file.type === "image/heif" || name.endsWith(".heic") || name.endsWith(".heif");
+}
+async function photoToDisplayDataUrl(file) {
+  if (!isHeicLike(file)) return fileToBase64(file);
+  const jpeg = await convertHeicToJpeg(file);
+  return fileToBase64(jpeg);
+}
+async function convertHeicToJpeg(blob) {
+  const { default: heic2any } = await import("heic2any");
+  const converted = await heic2any({ blob, toType: "image/jpeg", quality: 0.9 });
+  return Array.isArray(converted) ? converted[0] : converted;
+}
+function dataUrlToBlob(dataUrl) {
+  const [meta, data] = dataUrl.split(",");
+  const mime = meta.match(/data:(.*?);base64/)?.[1] || "application/octet-stream";
+  const bytes = atob(data);
+  const parts = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) parts[i] = bytes.charCodeAt(i);
+  return new Blob([parts], { type: mime });
+}
+async function displayablePhotoUrl(photoUrl, fileName = "") {
+  const isHeicData = photoUrl?.startsWith("data:image/heic") || photoUrl?.startsWith("data:image/heif");
+  const isHeicName = fileName.toLowerCase().endsWith(".heic") || fileName.toLowerCase().endsWith(".heif");
+  if (!photoUrl || (!isHeicData && !isHeicName)) return photoUrl;
+  try {
+    const jpeg = await convertHeicToJpeg(dataUrlToBlob(photoUrl));
+    return fileToBase64(jpeg);
+  } catch {
+    return photoUrl;
+  }
+}
 
 function LogoMark({ size = 42 }) {
   return (
@@ -288,7 +321,7 @@ function ProfileLightbox({ profile, user, onClose }) {
 }
 
 // ─── Image Lightbox ───
-function Lightbox({ pin, onClose }) {
+function Lightbox({ pin, onClose, onDelete }) {
   if (!pin) return null;
   return (
     <div onClick={onClose} style={{
@@ -309,6 +342,7 @@ function Lightbox({ pin, onClose }) {
           <div style={{ fontSize: 18, fontWeight: 700, fontFamily: "'DM Sans', sans-serif" }}>{pin.place}</div>
           {pin.date && <div style={{ fontSize: 13, opacity: 0.7, marginTop: 4, fontFamily: "'DM Sans', sans-serif" }}>{pin.date}</div>}
           <div style={{ fontSize: 12, opacity: 0.5, marginTop: 2, fontFamily: "'DM Sans', sans-serif" }}>{pin.fileName}</div>
+          <button onClick={() => onDelete?.(pin)} style={{ ...dangerBtnStyle, marginTop: 14 }}>Delete Photo</button>
         </div>
         <button onClick={onClose} style={{
           position: "absolute", top: 12, right: 12, width: 36, height: 36,
@@ -691,6 +725,7 @@ const authTitleStyle = { fontFamily: "'DM Sans', sans-serif", fontSize: 18, font
 const inputStyle = { width: "100%", padding: "14px 16px", background: "rgba(255,255,255,0.085)", border: `1px solid ${palette.line}`, borderRadius: 14, color: palette.text, fontSize: 14, fontFamily: "'DM Sans', sans-serif", outline: "none", boxSizing: "border-box" };
 const authBtnStyle = { width: "100%", padding: "14px", background: `linear-gradient(135deg, ${palette.accent}, ${palette.accentDark})`, color: "white", border: "none", borderRadius: 14, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", boxShadow: "0 12px 28px rgba(255,107,74,0.28)" };
 const secondaryBtnStyle = { padding: "12px 16px", background: "rgba(255,255,255,0.09)", color: palette.text, border: `1px solid ${palette.line}`, borderRadius: 14, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif" };
+const dangerBtnStyle = { padding: "9px 12px", background: "rgba(255,107,74,0.16)", color: "#FFB19F", border: "1px solid rgba(255,107,74,0.35)", borderRadius: 12, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif" };
 
 function Fonts() { return <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet" />; }
 
@@ -749,7 +784,7 @@ export default function App() {
       setLoading(true);
       const { data } = await supabase.from("locations").select("*").eq("user_id", user.id).order("created_at", { ascending: true });
       if (data && data.length > 0) {
-        const loaded = data.map((r) => ({ id: r.id, lat: r.lat, lon: r.lon, place: r.place || "Unknown", city: r.city || "", country: r.country || "", date: r.date || null, thumb: r.photo_url || null, fileName: r.file_name || "" }));
+        const loaded = await Promise.all(data.map(async (r) => ({ id: r.id, lat: r.lat, lon: r.lon, place: r.place || "Unknown", city: r.city || "", country: r.country || "", date: r.date || null, thumb: await displayablePhotoUrl(r.photo_url || null, r.file_name || ""), fileName: r.file_name || "" })));
         setPins(loaded); fitMapToPins(loaded);
       }
       setLoading(false);
@@ -758,7 +793,8 @@ export default function App() {
   }, [user, needsUsername]);
 
   function fitMapToPins(all) {
-    if (all.length === 1) { setCenter({ lat: all[0].lat, lon: all[0].lon }); setZoom(10); }
+    if (all.length === 0) { setCenter({ lat: 1.35, lon: 103.82 }); setZoom(3); }
+    else if (all.length === 1) { setCenter({ lat: all[0].lat, lon: all[0].lon }); setZoom(10); }
     else if (all.length > 1) {
       const lats = all.map(p => p.lat), lons = all.map(p => p.lon);
       setCenter({ lat: (Math.min(...lats) + Math.max(...lats)) / 2, lon: (Math.min(...lons) + Math.max(...lons)) / 2 });
@@ -776,7 +812,7 @@ export default function App() {
       const gps = await parseExifGPS(file);
       if (gps?.lat && gps?.lon) {
         const geo = await reverseGeocode(gps.lat, gps.lon);
-        const b64 = await fileToBase64(file);
+        const b64 = await photoToDisplayDataUrl(file);
         const { data, error } = await supabase.from("locations").insert({ lat: gps.lat, lon: gps.lon, place: geo.display || "Unknown", city: geo.city || "", country: geo.country || "", date: gps.date || null, photo_url: b64, file_name: file.name, user_id: user.id }).select().single();
         if (!error) np.push({ id: data.id, lat: gps.lat, lon: gps.lon, place: geo.display || "Unknown", city: geo.city, country: geo.country, date: gps.date || null, thumb: b64, fileName: file.name });
       }
@@ -789,6 +825,21 @@ export default function App() {
   const clearAll = async () => {
     if (pins.length > 0) await supabase.from("locations").delete().in("id", pins.map(p => p.id));
     setPins([]); setSelectedPin(null); setCenter({ lat: 1.35, lon: 103.82 }); setZoom(3);
+  };
+
+  const deletePin = async (pin) => {
+    if (!pin?.id) return;
+    const ok = window.confirm(`Delete ${pin.fileName || "this photo"} from your map?`);
+    if (!ok) return;
+    const { error } = await supabase.from("locations").delete().eq("id", pin.id).eq("user_id", user.id);
+    if (error) { alert(error.message); return; }
+    setLightboxPin(current => current?.id === pin.id ? null : current);
+    setSelectedPin(current => current === pin.id ? null : current);
+    setPins(prev => {
+      const next = prev.filter(p => p.id !== pin.id);
+      fitMapToPins(next);
+      return next;
+    });
   };
 
   const handleLogout = async () => { await supabase.auth.signOut(); setPins([]); setUser(null); setProfile(null); };
@@ -813,7 +864,7 @@ export default function App() {
       <Fonts />
 
       {/* Lightbox */}
-      <Lightbox pin={lightboxPin} onClose={() => setLightboxPin(null)} />
+      <Lightbox pin={lightboxPin} onClose={() => setLightboxPin(null)} onDelete={deletePin} />
       <ProfileLightbox profile={showProfilePreview ? profile : null} user={user} onClose={() => setShowProfilePreview(false)} />
 
       {/* Edit Profile */}
@@ -893,11 +944,18 @@ export default function App() {
                 }}>
                   {pin.thumb && <img src={pin.thumb} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
                 </div>
-                <div style={{ minWidth: 0 }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{pin.place}</div>
                   {pin.date && <div style={{ fontSize: 11, opacity: 0.4 }}>{pin.date}</div>}
                   <div style={{ fontSize: 10, opacity: 0.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{pin.fileName}</div>
                 </div>
+                <button
+                  onClick={(e) => { e.stopPropagation(); deletePin(pin); }}
+                  title="Delete photo"
+                  style={{ ...dangerBtnStyle, width: 34, height: 34, padding: 0, flexShrink: 0, alignSelf: "center" }}
+                >
+                  ×
+                </button>
               </div>
             ))}
           </div>
