@@ -1,4 +1,11 @@
 import { useState, useRef, useCallback, useEffect } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+// ─── Supabase setup ───
+const supabase = createClient(
+  "https://dhywbdwveorpkurckflb.supabase.co",
+  "sb_publishable_lFvJV3GM4cuzZ4GMTvUyVw_c-Am1bZU"
+);
 
 const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 
@@ -125,7 +132,15 @@ async function reverseGeocode(lat, lon) {
   }
 }
 
-function SlippyMap({ pins, center, zoom, onMove }) {
+function fileToBase64(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.readAsDataURL(file);
+  });
+}
+
+function SlippyMap({ pins, center, zoom }) {
   const containerRef = useRef(null);
   const dragging = useRef(false);
   const lastPos = useRef({ x: 0, y: 0 });
@@ -314,7 +329,63 @@ export default function TravelMap() {
   const [zoom, setZoom] = useState(3);
   const [selectedPin, setSelectedPin] = useState(null);
   const [stats, setStats] = useState({ countries: 0, cities: 0 });
+  const [loading, setLoading] = useState(true);
   const fileInputRef = useRef(null);
+
+  // ─── Load saved pins from Supabase on startup ───
+  useEffect(() => {
+    async function loadPins() {
+      try {
+        const { data, error } = await supabase
+          .from("locations")
+          .select("*")
+          .order("created_at", { ascending: true });
+
+        if (error) {
+          console.error("Error loading pins:", error);
+          setLoading(false);
+          return;
+        }
+
+        if (data && data.length > 0) {
+          const loaded = data.map((row) => ({
+            id: row.id,
+            lat: row.lat,
+            lon: row.lon,
+            place: row.place || "Unknown",
+            city: row.city || "",
+            country: row.country || "",
+            date: row.date || null,
+            thumb: row.photo_url || null,
+            fileName: row.file_name || "",
+          }));
+          setPins(loaded);
+
+          // Fit map to loaded pins
+          const lats = loaded.map(p => p.lat);
+          const lons = loaded.map(p => p.lon);
+          if (loaded.length === 1) {
+            setCenter({ lat: loaded[0].lat, lon: loaded[0].lon });
+            setZoom(10);
+          } else {
+            setCenter({
+              lat: (Math.min(...lats) + Math.max(...lats)) / 2,
+              lon: (Math.min(...lons) + Math.max(...lons)) / 2,
+            });
+            const diff = Math.max(
+              Math.max(...lats) - Math.min(...lats),
+              Math.max(...lons) - Math.min(...lons)
+            );
+            setZoom(diff > 100 ? 2 : diff > 50 ? 3 : diff > 20 ? 4 : diff > 5 ? 6 : diff > 1 ? 8 : 11);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load pins:", err);
+      }
+      setLoading(false);
+    }
+    loadPins();
+  }, []);
 
   useEffect(() => {
     const countries = new Set(pins.map(p => p.country).filter(Boolean));
@@ -331,16 +402,40 @@ export default function TravelMap() {
       const gps = await parseExifGPS(file);
       if (gps && gps.lat && gps.lon) {
         const geo = await reverseGeocode(gps.lat, gps.lon);
-        const thumb = URL.createObjectURL(file);
+
+        // Convert image to base64 for thumbnail & storage
+        const base64 = await fileToBase64(file);
+
+        // Save to Supabase
+        const { data, error } = await supabase
+          .from("locations")
+          .insert({
+            lat: gps.lat,
+            lon: gps.lon,
+            place: geo.display || "Unknown",
+            city: geo.city || "",
+            country: geo.country || "",
+            date: gps.date || null,
+            photo_url: base64,
+            file_name: file.name,
+          })
+          .select()
+          .single();
+
+        if (error) {
+          console.error("Error saving to Supabase:", error);
+          continue;
+        }
+
         newPins.push({
-          id: `${Date.now()}-${Math.random()}`,
+          id: data.id,
           lat: gps.lat,
           lon: gps.lon,
           place: geo.display || "Unknown",
           city: geo.city,
           country: geo.country,
           date: gps.date || null,
-          thumb,
+          thumb: base64,
           fileName: file.name,
         });
       }
@@ -381,8 +476,16 @@ export default function TravelMap() {
     processFiles(e.dataTransfer.files);
   };
 
-  const clearAll = () => {
-    pins.forEach(p => { if (p.thumb) URL.revokeObjectURL(p.thumb); });
+  const clearAll = async () => {
+    // Delete all from Supabase
+    const ids = pins.map(p => p.id);
+    if (ids.length > 0) {
+      const { error } = await supabase
+        .from("locations")
+        .delete()
+        .in("id", ids);
+      if (error) console.error("Error deleting:", error);
+    }
     setPins([]);
     setSelectedPin(null);
     setCenter({ lat: 1.35, lon: 103.82 });
@@ -491,7 +594,7 @@ export default function TravelMap() {
                   width: 48, height: 48, borderRadius: 10, overflow: "hidden", flexShrink: 0,
                   border: "2px solid rgba(255,255,255,0.1)",
                 }}>
-                  <img src={pin.thumb} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  {pin.thumb && <img src={pin.thumb} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
                 </div>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 2 }}>{pin.place}</div>
@@ -515,8 +618,26 @@ export default function TravelMap() {
         >
           <SlippyMap pins={pins} center={center} zoom={zoom} />
 
+          {/* Loading state */}
+          {loading && (
+            <div style={{
+              position: "absolute", inset: 0, display: "flex", alignItems: "center",
+              justifyContent: "center", zIndex: 25,
+              background: "rgba(10,10,15,0.8)", backdropFilter: "blur(4px)",
+            }}>
+              <div style={{ textAlign: "center" }}>
+                <div style={{
+                  width: 32, height: 32, border: "3px solid rgba(230,57,70,0.3)",
+                  borderTop: "3px solid #E63946", borderRadius: "50%",
+                  animation: "spin 0.8s linear infinite", margin: "0 auto 16px",
+                }} />
+                <div style={{ fontSize: 16, opacity: 0.7 }}>Loading your travels...</div>
+              </div>
+            </div>
+          )}
+
           {/* Upload overlay / button */}
-          {pins.length === 0 && !processing && (
+          {!loading && pins.length === 0 && !processing && (
             <div style={{
               position: "absolute", inset: 0, display: "flex", alignItems: "center",
               justifyContent: "center", zIndex: 20,
