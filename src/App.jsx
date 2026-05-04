@@ -8,6 +8,13 @@ const supabase = createClient(
 
 const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "").split(",").map(email => email.trim().toLowerCase()).filter(Boolean);
+const APP_VERSION = "1.1.0";
+
+function useIsMobile() {
+  const [m, setM] = useState(() => window.innerWidth < 640);
+  useEffect(() => { const h = () => setM(window.innerWidth < 640); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
+  return m;
+}
 
 const palette = {
   ink: "#111827",
@@ -1022,7 +1029,7 @@ function EditProfile({ profile, onSave, onClose }) {
 }
 
 // ─── Map Component ───
-function SlippyMap({ pins, center, zoom, onPinClick, heatPoints = [] }) {
+function SlippyMap({ pins, center, zoom, onPinClick, heatPoints = [], onMapClick, placementMode = false }) {
   const containerRef = useRef(null);
   const dragging = useRef(false);
   const dragMoved = useRef(false);
@@ -1068,11 +1075,19 @@ function SlippyMap({ pins, center, zoom, onPinClick, heatPoints = [] }) {
     setMapState((prev) => { const c2 = degToNum(prev.center.lat, prev.center.lon, prev.zoom); const nc = numToDeg(c2.x - dx / tileSize, c2.y - dy / tileSize, prev.zoom); return { ...prev, center: { lat: nc.lat, lon: nc.lon } }; });
   };
   const handlePointerUp = () => { dragging.current = false; setIsDragging(false); };
+  const handleContainerClick = (e) => {
+    if (dragMoved.current || !onMapClick) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const px = e.clientX - rect.left, py = e.clientY - rect.top;
+    const c2 = degToNum(mapState.center.lat, mapState.center.lon, mapState.zoom);
+    const tlX = c2.x * tileSize - size.w / 2, tlY = c2.y * tileSize - size.h / 2;
+    onMapClick(numToDeg((tlX + px) / tileSize, (tlY + py) / tileSize, mapState.zoom));
+  };
   const handleWheel = (e) => { e.preventDefault(); setMapState((p) => ({ ...p, zoom: Math.max(1, Math.min(18, p.zoom + (e.deltaY > 0 ? -1 : 1))) })); };
 
   return (
-    <div ref={containerRef} style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden", cursor: isDragging ? "grabbing" : "grab", touchAction: "none", borderRadius: "16px" }}
-      onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onWheel={handleWheel}>
+    <div ref={containerRef} style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden", cursor: isDragging ? "grabbing" : placementMode ? "crosshair" : "grab", touchAction: "none", borderRadius: "16px" }}
+      onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onWheel={handleWheel} onClick={handleContainerClick}>
       {tiles.map((t) => <img key={t.key} src={t.url} alt="" style={{ position: "absolute", left: t.left, top: t.top, width: tileSize, height: tileSize, pointerEvents: "none" }} draggable={false} />)}
       {heatPos.map((point, i) => (
         <div key={`${point.lat}-${point.lon}-${i}`} title={`${point.place}: ${point.count} uploads`} style={{
@@ -1193,6 +1208,9 @@ export default function App() {
   const [selectedPin, setSelectedPin] = useState(null);
   const [loading, setLoading] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [pendingPhotos, setPendingPhotos] = useState([]); // [{file, thumb, fileName}]
+  const [showTimeline, setShowTimeline] = useState(false); // mobile sidebar toggle
+  const isMobile = useIsMobile();
   const fileInputRef = useRef(null);
 
   const stats = useMemo(() => ({
@@ -1266,11 +1284,22 @@ export default function App() {
     }
   }
 
+  const savePhotoAt = useCallback(async (file, lat, lon, thumb) => {
+    const geo = await reverseGeocode(lat, lon);
+    const b64 = thumb || await photoToDisplayDataUrl(file);
+    const { data, error } = await supabase.from("locations").insert({ lat, lon, place: geo.display || "Unknown", city: geo.city || "", country: geo.country || "", date: null, photo_url: b64, file_name: file.name, user_id: user.id }).select().single();
+    if (!error) {
+      const pin = { id: data.id, lat, lon, place: geo.display || "Unknown", city: geo.city, country: geo.country, date: null, thumb: b64, fileName: file.name };
+      setPins(prev => { const all = [...prev, pin]; fitMapToPins(all); return all; });
+      setAllLocations(prev => [{ id: data.id, lat, lon, place: geo.display || "Unknown" }, ...prev]);
+    }
+  }, [user]);
+
   const processFiles = useCallback(async (files) => {
     if (!user) return;
     setProcessing(true);
     const imgs = Array.from(files).filter(isPhotoFile);
-    const np = [];
+    const np = [], noGps = [];
     for (const file of imgs) {
       const gps = await parseExifGPS(file);
       if (gps?.lat && gps?.lon) {
@@ -1281,12 +1310,27 @@ export default function App() {
           np.push({ id: data.id, lat: gps.lat, lon: gps.lon, place: geo.display || "Unknown", city: geo.city, country: geo.country, date: gps.date || null, thumb: b64, fileName: file.name });
           setAllLocations(prev => [{ id: data.id, lat: gps.lat, lon: gps.lon, place: geo.display || "Unknown" }, ...prev]);
         }
+      } else {
+        noGps.push(file);
       }
     }
     if (np.length > 0) setPins(prev => { const all = [...prev, ...np]; fitMapToPins(all); return all; });
-    if (np.length === 0 && imgs.length > 0) alert(`No GPS data found in ${imgs.length} image(s).`);
+    if (noGps.length > 0) {
+      // Try device geolocation first
+      const pos = await new Promise(resolve => {
+        if (!navigator.geolocation) return resolve(null);
+        navigator.geolocation.getCurrentPosition(p => resolve(p), () => resolve(null), { timeout: 8000 });
+      });
+      if (pos) {
+        for (const file of noGps) await savePhotoAt(file, pos.coords.latitude, pos.coords.longitude, null);
+      } else {
+        // Queue for manual map placement
+        const queued = await Promise.all(noGps.map(async f => ({ file: f, thumb: await photoToDisplayDataUrl(f), fileName: f.name })));
+        setPendingPhotos(prev => [...prev, ...queued]);
+      }
+    }
     setProcessing(false);
-  }, [user]);
+  }, [user, savePhotoAt]);
 
   const clearAll = async () => {
     if (pins.length > 0) await supabase.from("locations").delete().in("id", pins.map(p => p.id));
@@ -1325,6 +1369,24 @@ export default function App() {
 
   const handleLogout = async () => { await supabase.auth.signOut(); setPins([]); setUser(null); setProfile(null); };
 
+  const handleMapClick = useCallback(async (geo) => {
+    if (pendingPhotos.length === 0) return;
+    const [current, ...rest] = pendingPhotos;
+    setPendingPhotos(rest);
+    await savePhotoAt(current.file, geo.lat, geo.lon, current.thumb);
+  }, [pendingPhotos, savePhotoAt]);
+
+  const handleUseMyLocation = useCallback(async () => {
+    if (pendingPhotos.length === 0) return;
+    const pos = await new Promise(resolve => {
+      navigator.geolocation.getCurrentPosition(p => resolve(p), () => resolve(null), { timeout: 8000 });
+    });
+    if (!pos) return;
+    const [current, ...rest] = pendingPhotos;
+    setPendingPhotos(rest);
+    await savePhotoAt(current.file, pos.coords.latitude, pos.coords.longitude, current.thumb);
+  }, [pendingPhotos, savePhotoAt]);
+
   const sortedPins = [...pins].sort((a, b) => { if (!a.date && !b.date) return 0; if (!a.date) return 1; if (!b.date) return -1; return a.date.localeCompare(b.date); });
 
   if (checkingAuth) return (
@@ -1355,16 +1417,23 @@ export default function App() {
       {showAdminPanel && isAdmin && <AdminPanel currentUser={user} onClose={() => setShowAdminPanel(false)} />}
 
       {/* Header */}
-      <header style={{ padding: "14px 28px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "relative", zIndex: 10, borderBottom: `1px solid ${palette.line}`, background: "rgba(17,24,39,0.72)", backdropFilter: "blur(18px)" }}>
-        <BrandLockup align="left" titleSize={26} compact />
+      <header style={{ padding: isMobile ? "10px 16px" : "14px 28px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "relative", zIndex: 10, borderBottom: `1px solid ${palette.line}`, background: "rgba(17,24,39,0.72)", backdropFilter: "blur(18px)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <BrandLockup align="left" titleSize={isMobile ? 20 : 26} compact />
+          <span style={{ fontSize: 10, opacity: 0.35, letterSpacing: "0.5px", marginTop: 2 }}>v{APP_VERSION}</span>
+        </div>
 
-        <div style={{ display: "flex", gap: 20, alignItems: "center" }}>
-          {pins.length > 0 && <>
+        <div style={{ display: "flex", gap: isMobile ? 10 : 20, alignItems: "center" }}>
+          {pins.length > 0 && !isMobile && <>
             <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800, color: palette.mint }}>{stats.countries}</div><div style={{ fontSize: 9, opacity: 0.5, letterSpacing: "1px" }}>COUNTRIES</div></div>
             <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800, color: palette.gold }}>{stats.cities}</div><div style={{ fontSize: 9, opacity: 0.5, letterSpacing: "1px" }}>CITIES</div></div>
             <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800, color: palette.sky }}>{pins.length}</div><div style={{ fontSize: 9, opacity: 0.5, letterSpacing: "1px" }}>PHOTOS</div></div>
             <button onClick={clearAll} style={secondaryBtnStyle}>Clear All</button>
           </>}
+          {pins.length > 0 && isMobile && <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+            <div style={{ textAlign: "center" }}><div style={{ fontSize: 16, fontWeight: 800, color: palette.mint }}>{stats.countries}</div><div style={{ fontSize: 8, opacity: 0.5, letterSpacing: "1px" }}>CNTRS</div></div>
+            <div style={{ textAlign: "center" }}><div style={{ fontSize: 16, fontWeight: 800, color: palette.sky }}>{pins.length}</div><div style={{ fontSize: 8, opacity: 0.5, letterSpacing: "1px" }}>PHOTOS</div></div>
+          </div>}
 
           {/* User avatar & dropdown */}
           <div style={{ position: "relative", paddingLeft: pins.length > 0 ? 12 : 0, borderLeft: pins.length > 0 ? "1px solid rgba(255,255,255,0.1)" : "none" }}>
@@ -1419,9 +1488,50 @@ export default function App() {
       {/* Click away to close menu */}
       {showUserMenu && <div onClick={() => setShowUserMenu(false)} style={{ position: "fixed", inset: 0, zIndex: 5 }} />}
 
+      {/* Placement mode banner */}
+      {pendingPhotos.length > 0 && (
+        <div style={{ position: "fixed", top: isMobile ? 58 : 78, left: "50%", transform: "translateX(-50%)", zIndex: 200, background: "rgba(17,24,39,0.96)", border: `1px solid ${palette.gold}`, borderRadius: 16, padding: "12px 18px", display: "flex", alignItems: "center", gap: 12, boxShadow: "0 8px 32px rgba(0,0,0,0.4)", maxWidth: "calc(100vw - 32px)" }}>
+          {pendingPhotos[0].thumb && <img src={pendingPhotos[0].thumb} alt="" style={{ width: 40, height: 40, borderRadius: 8, objectFit: "cover", flexShrink: 0 }} />}
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: palette.gold }}>No GPS — tap the map to place</div>
+            <div style={{ fontSize: 11, opacity: 0.55, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{pendingPhotos[0].fileName}{pendingPhotos.length > 1 ? ` (+${pendingPhotos.length - 1} more)` : ""}</div>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+            {navigator.geolocation && <button onClick={handleUseMyLocation} style={{ ...secondaryBtnStyle, padding: "8px 12px", fontSize: 12, border: `1px solid ${palette.mint}`, color: palette.mint }}>📍 Use my location</button>}
+            <button onClick={() => setPendingPhotos(prev => prev.slice(1))} style={{ ...secondaryBtnStyle, padding: "8px 10px", fontSize: 12, opacity: 0.6 }}>Skip</button>
+            <button onClick={() => setPendingPhotos([])} style={{ ...dangerBtnStyle, padding: "8px 10px", fontSize: 12 }}>✕</button>
+          </div>
+        </div>
+      )}
+
       {/* Main content */}
-      <div style={{ display: "flex", height: "calc(100vh - 76px)", position: "relative", zIndex: 5 }}>
-        <div style={{ width: pins.length > 0 ? 320 : 0, minWidth: pins.length > 0 ? 320 : 0, overflow: "hidden", transition: "all 0.4s cubic-bezier(0.4, 0, 0.2, 1)", borderRight: pins.length > 0 ? "1px solid rgba(255,255,255,0.06)" : "none", display: "flex", flexDirection: "column" }}>
+      <div style={{ display: "flex", height: isMobile ? "calc(100dvh - 58px)" : "calc(100vh - 76px)", position: "relative", zIndex: 5 }}>
+        {/* Mobile timeline drawer */}
+        {isMobile && showTimeline && pins.length > 0 && (
+          <div onClick={() => setShowTimeline(false)} style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(0,0,0,0.5)" }}>
+            <div onClick={e => e.stopPropagation()} style={{ position: "absolute", bottom: 0, left: 0, right: 0, maxHeight: "70vh", background: "rgba(17,24,39,0.98)", borderRadius: "20px 20px 0 0", border: `1px solid ${palette.line}`, display: "flex", flexDirection: "column" }}>
+              <div style={{ padding: "14px 20px 10px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <h2 style={{ margin: 0, fontSize: 13, letterSpacing: "1px", opacity: 0.5, fontWeight: 600 }}>TIMELINE</h2>
+                <button onClick={() => setShowTimeline(false)} style={{ background: "none", border: "none", color: palette.text, fontSize: 20, cursor: "pointer", opacity: 0.5 }}>×</button>
+              </div>
+              <div style={{ flex: 1, overflowY: "auto", padding: "6px 0" }}>
+                {sortedPins.map((pin) => (
+                  <div key={pin.id} onClick={() => { setSelectedPin(pin.id); setCenter({ lat: pin.lat, lon: pin.lon }); setZoom(12); setShowTimeline(false); }} style={{ display: "flex", gap: 12, padding: "10px 20px", cursor: "pointer", background: selectedPin === pin.id ? "rgba(230,57,70,0.1)" : "transparent", borderLeft: selectedPin === pin.id ? "3px solid #E63946" : "3px solid transparent" }}>
+                    <div onClick={(e) => { e.stopPropagation(); setLightboxPin(pin); }} style={{ width: 48, height: 48, borderRadius: 10, overflow: "hidden", flexShrink: 0, border: "2px solid rgba(255,255,255,0.1)", cursor: "zoom-in" }}>
+                      {pin.thumb && <img src={pin.thumb} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+                    </div>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{pin.place}</div>
+                      {pin.date && <div style={{ fontSize: 11, opacity: 0.4 }}>{pin.date}</div>}
+                    </div>
+                    <button onClick={(e) => { e.stopPropagation(); deletePin(pin); }} style={{ ...dangerBtnStyle, width: 34, height: 34, padding: 0, flexShrink: 0, alignSelf: "center" }}>×</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+        <div style={{ width: !isMobile && pins.length > 0 ? 320 : 0, minWidth: !isMobile && pins.length > 0 ? 320 : 0, overflow: "hidden", transition: "all 0.4s cubic-bezier(0.4, 0, 0.2, 1)", borderRight: !isMobile && pins.length > 0 ? "1px solid rgba(255,255,255,0.06)" : "none", display: "flex", flexDirection: "column" }}>
           <div style={{ padding: "18px 20px 10px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
             <h2 style={{ margin: 0, fontSize: 13, letterSpacing: "1px", opacity: 0.5, fontWeight: 600 }}>TIMELINE</h2>
           </div>
@@ -1457,7 +1567,7 @@ export default function App() {
         </div>
 
         <div style={{ flex: 1, position: "relative" }} onDragOver={(e) => { e.preventDefault(); setDragOver(true); }} onDragLeave={() => setDragOver(false)} onDrop={(e) => { e.preventDefault(); setDragOver(false); processFiles(e.dataTransfer.files); }}>
-          <SlippyMap pins={pins} heatPoints={showHeatmap ? publicHeatPoints : []} center={center} zoom={zoom} onPinClick={(p) => setLightboxPin(p)} />
+          <SlippyMap pins={pins} heatPoints={showHeatmap ? publicHeatPoints : []} center={center} zoom={zoom} onPinClick={(p) => setLightboxPin(p)} onMapClick={pendingPhotos.length > 0 ? handleMapClick : undefined} placementMode={pendingPhotos.length > 0} />
 
           {loading && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 25, background: "rgba(10,10,15,0.8)" }}>
             <div style={{ textAlign: "center" }}><div style={{ width: 32, height: 32, border: "3px solid rgba(230,57,70,0.3)", borderTop: "3px solid #E63946", borderRadius: "50%", animation: "spin 0.8s linear infinite", margin: "0 auto 16px" }} /><div style={{ fontSize: 16, opacity: 0.7 }}>Loading your travels...</div></div>
@@ -1467,8 +1577,8 @@ export default function App() {
             <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 20, background: "rgba(10,10,15,0.7)", backdropFilter: "blur(4px)" }}>
               <div style={{ textAlign: "center", padding: 48, border: `2px dashed ${palette.line}`, borderRadius: 24, background: "rgba(255,255,255,0.055)", maxWidth: 420, boxShadow: "0 22px 70px rgba(0,0,0,0.22)" }}>
                 <div style={{ display: "flex", justifyContent: "center", marginBottom: 18 }}><LogoMark size={64} /></div>
-                <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 26, fontWeight: 800, margin: "0 0 8px" }}>Drop your photos here</h2>
-                <p style={{ fontSize: 14, opacity: 0.5, margin: "0 0 24px", lineHeight: 1.6 }}>Upload photos with GPS data and watch<br />your travels appear on the map</p>
+                <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 26, fontWeight: 800, margin: "0 0 8px" }}>{isMobile ? "Tap + to add photos" : "Drop your photos here"}</h2>
+                <p style={{ fontSize: 14, opacity: 0.5, margin: "0 0 24px", lineHeight: 1.6 }}>{isMobile ? "Upload photos with GPS and watch your travels appear on the map" : <>Upload photos with GPS data and watch<br />your travels appear on the map</>}</p>
                 <button onClick={() => fileInputRef.current?.click()} style={{ ...authBtnStyle, width: "auto", padding: "14px 36px", transition: "transform 0.2s ease" }}
                   onMouseEnter={e => e.target.style.transform = "scale(1.05)"} onMouseLeave={e => e.target.style.transform = "scale(1)"}>Choose Photos</button>
               </div>
@@ -1476,10 +1586,11 @@ export default function App() {
           )}
 
           <div style={{ position: "absolute", top: 16, left: 16, zIndex: 30, display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button onClick={() => fileInputRef.current?.click()} style={{ background: `linear-gradient(135deg, ${palette.accent}, ${palette.accentDark})`, color: "white", border: "none", padding: "10px 18px", borderRadius: 14, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", boxShadow: "0 12px 28px rgba(255,107,74,0.25)", display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontSize: 18 }}>+</span> Add Photos</button>
+            {!isMobile && <button onClick={() => fileInputRef.current?.click()} style={{ background: `linear-gradient(135deg, ${palette.accent}, ${palette.accentDark})`, color: "white", border: "none", padding: "10px 18px", borderRadius: 14, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", boxShadow: "0 12px 28px rgba(255,107,74,0.25)", display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontSize: 18 }}>+</span> Add Photos</button>}
             <button onClick={togglePopularPlaces} style={{ ...secondaryBtnStyle, padding: "10px 14px", background: showHeatmap ? "rgba(66,217,184,0.22)" : "rgba(17,24,39,0.78)", border: showHeatmap ? `1px solid ${palette.mint}` : `1px solid ${palette.line}`, boxShadow: "0 12px 28px rgba(0,0,0,0.18)" }}>
-              Popular Places
+              {isMobile ? "🔥" : "Popular Places"}
             </button>
+            {isMobile && pins.length > 0 && <button onClick={() => setShowTimeline(t => !t)} style={{ ...secondaryBtnStyle, padding: "10px 14px", background: "rgba(17,24,39,0.78)", boxShadow: "0 12px 28px rgba(0,0,0,0.18)" }}>☰</button>}
           </div>
 
           {showHeatmap && <div style={{ position: "absolute", left: 16, bottom: 16, zIndex: 30, background: "rgba(17,24,39,0.82)", border: `1px solid ${palette.line}`, borderRadius: 12, padding: "9px 12px", color: palette.text, fontSize: 12, boxShadow: "0 12px 30px rgba(0,0,0,0.2)" }}>
@@ -1491,7 +1602,11 @@ export default function App() {
           {processing && <div style={{ position: "absolute", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 50, background: "rgba(15,15,15,0.92)", color: "#e8e6e1", padding: "12px 24px", borderRadius: 12, fontSize: 14, boxShadow: "0 4px 20px rgba(0,0,0,0.4)", display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{ width: 16, height: 16, border: "2px solid rgba(230,57,70,0.3)", borderTop: "2px solid #E63946", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />Reading GPS data...</div>}
 
-          <input ref={fileInputRef} type="file" multiple accept="image/*,.heic,.heif" style={{ display: "none" }} onChange={(e) => processFiles(e.target.files)} />
+          <input ref={fileInputRef} type="file" multiple accept="image/*,.heic,.heif" capture="environment" style={{ display: "none" }} onChange={(e) => processFiles(e.target.files)} />
+          {/* Mobile FAB */}
+          {isMobile && (
+            <button onClick={() => fileInputRef.current?.click()} style={{ position: "absolute", bottom: 24, right: 16, zIndex: 30, width: 56, height: 56, borderRadius: "50%", background: `linear-gradient(135deg, ${palette.accent}, ${palette.accentDark})`, color: "white", border: "none", fontSize: 26, fontWeight: 700, cursor: "pointer", boxShadow: "0 8px 24px rgba(255,107,74,0.45)", display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
+          )}
         </div>
       </div>
 
