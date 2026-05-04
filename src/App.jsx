@@ -7,6 +7,7 @@ const supabase = createClient(
 );
 
 const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "").split(",").map(email => email.trim().toLowerCase()).filter(Boolean);
 
 const palette = {
   ink: "#111827",
@@ -321,6 +322,216 @@ function ProfileLightbox({ profile, user, onClose }) {
 }
 
 // ─── Image Lightbox ───
+function AdminPanel({ currentUser, onClose }) {
+  const [profiles, setProfiles] = useState([]);
+  const [authUsers, setAuthUsers] = useState(new Map());
+  const [uploads, setUploads] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [userId, setUserId] = useState("");
+  const [newEmail, setNewEmail] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [selectedUserId, setSelectedUserId] = useState("");
+  const [previewProfile, setPreviewProfile] = useState(null);
+  const [message, setMessage] = useState("");
+  const [authEmailError, setAuthEmailError] = useState("");
+
+  const uploadCounts = useMemo(() => {
+    const counts = new Map();
+    for (const upload of uploads) counts.set(upload.user_id, (counts.get(upload.user_id) || 0) + 1);
+    return counts;
+  }, [uploads]);
+  const effectiveUserId = userId || selectedUserId;
+  const selectedUser = profiles.find(person => person.id === effectiveUserId);
+  const selectedEmail = selectedUser ? userEmail(selectedUser) : "";
+  const filteredUploads = effectiveUserId ? uploads.filter(upload => upload.user_id === effectiveUserId) : uploads;
+
+  function userEmail(person) {
+    return authUsers.get(person.id)?.email || person.email || "";
+  }
+
+  useEffect(() => {
+    async function loadAdminData() {
+      setLoading(true);
+      const [{ data: profileRows }, { data: locationRows }, authResult, rpcResult] = await Promise.all([
+        supabase.from("profiles").select("*"),
+        supabase.from("locations").select("*").order("created_at", { ascending: false }),
+        supabase.functions.invoke("admin-update-email", { body: { action: "listUsers" } }),
+        supabase.rpc("admin_user_accounts"),
+      ]);
+      const profileList = profileRows || [];
+      const profileById = new Map(profileList.map(p => [p.id, p]));
+      const authRows = authResult.data?.users?.length ? authResult.data.users : (rpcResult.data || []);
+      const authById = new Map(authRows.map(authUser => [authUser.id, authUser]));
+      const emailError = authResult.error?.message || authResult.data?.error || rpcResult.error?.message || "";
+      setAuthEmailError(authRows.length ? "" : emailError);
+      const uploadList = await Promise.all((locationRows || []).map(async (row) => ({
+        ...row,
+        profile: profileById.get(row.user_id),
+        thumb: await displayablePhotoUrl(row.photo_url || null, row.file_name || ""),
+      })));
+      setProfiles(profileList);
+      setAuthUsers(authById);
+      setUploads(uploadList);
+      setLoading(false);
+    }
+    loadAdminData();
+  }, []);
+
+  const selectAdminUser = (person) => {
+    setSelectedUserId(person.id);
+    setUserId(person.id);
+    setNewEmail("");
+    setNewPassword("");
+    setMessage("");
+  };
+
+  const handleUserIdChange = (value) => {
+    setUserId(value);
+    setSelectedUserId(profiles.some(person => person.id === value) ? value : "");
+    setNewEmail("");
+    setNewPassword("");
+    setMessage("");
+  };
+
+  const handleDeleteAdminUpload = async (upload) => {
+    const ok = window.confirm(`Delete ${upload.file_name || "this upload"} from @${upload.profile?.username || "this user"}?`);
+    if (!ok) return;
+    const { error } = await supabase.from("locations").delete().eq("id", upload.id);
+    if (error) { setMessage(error.message); return; }
+    setUploads(prev => prev.filter(item => item.id !== upload.id));
+    setMessage("Upload deleted");
+  };
+
+  const handleUpdateUserAccount = async () => {
+    setMessage("");
+    if (!userId) { setMessage("Choose a user first"); return; }
+    if (!newEmail && !newPassword) { setMessage("Enter a new email or new password"); return; }
+    if (newPassword && newPassword.length < 6) { setMessage("Password must be at least 6 characters"); return; }
+    const changes = [newEmail ? `email to ${newEmail}` : "", newPassword ? "password" : ""].filter(Boolean).join(" and ");
+    const ok = window.confirm(`Update this user's ${changes}?`);
+    if (!ok) return;
+    const { data, error } = await supabase.functions.invoke("admin-update-email", {
+      body: { userId, newEmail: newEmail || undefined, newPassword: newPassword || undefined },
+    });
+    if (error) setMessage(error.message);
+    else {
+      if (data?.user?.email) {
+        setAuthUsers(prev => new Map(prev).set(data.user.id, { ...prev.get(data.user.id), ...data.user }));
+        setProfiles(prev => prev.map(person => person.id === data.user.id ? { ...person, email: data.user.email } : person));
+      }
+      setMessage("User account updated");
+      setNewEmail("");
+      setNewPassword("");
+    }
+  };
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, zIndex: 950, background: "rgba(6,10,18,0.76)",
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
+      backdropFilter: "blur(12px)",
+    }}>
+      {previewProfile && <ProfileLightbox profile={previewProfile} user={{ email: userEmail(previewProfile) || previewProfile.id }} onClose={() => setPreviewProfile(null)} />}
+      <div onClick={(e) => e.stopPropagation()} style={{
+        width: "min(1080px, calc(100vw - 32px))", maxHeight: "calc(100vh - 48px)",
+        overflow: "hidden", borderRadius: 24, background: "rgba(17,24,39,0.96)",
+        border: `1px solid ${palette.line}`, boxShadow: "0 28px 90px rgba(0,0,0,0.46)",
+        display: "flex", flexDirection: "column",
+      }}>
+        <div style={{ padding: "22px 24px", borderBottom: `1px solid ${palette.line}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16 }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800 }}>Admin Dashboard</h2>
+            <div style={{ marginTop: 4, color: palette.muted, fontSize: 12 }}>Signed in as {currentUser.email}</div>
+          </div>
+          <button onClick={onClose} style={{ ...secondaryBtnStyle, padding: "10px 14px" }}>Close</button>
+        </div>
+
+        <div style={{ overflowY: "auto", padding: 24 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14, marginBottom: 20 }}>
+            <div style={adminStatStyle}><strong>{profiles.length}</strong><span>Users</span></div>
+            <div style={adminStatStyle}><strong>{uploads.length}</strong><span>Total uploads</span></div>
+          </div>
+
+          <div style={{ padding: 18, borderRadius: 18, background: "rgba(255,255,255,0.06)", border: `1px solid ${palette.line}`, marginBottom: 22 }}>
+            <h3 style={{ margin: "0 0 12px", fontSize: 14 }}>Manage User Account</h3>
+            {selectedUser && <div style={{ marginBottom: 10, color: palette.muted, fontSize: 12 }}>Selected: @{selectedUser.username || "unknown"} - {selectedEmail || "email unavailable"} - {uploadCounts.get(selectedUser.id) || 0} uploads</div>}
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 1fr) minmax(180px, 1fr) minmax(180px, 1fr) auto", gap: 10 }}>
+              <input value={userId} onChange={(e) => handleUserIdChange(e.target.value)} placeholder="User ID" style={inputStyle} />
+              <input value={newEmail} onChange={(e) => setNewEmail(e.target.value)} placeholder={selectedEmail ? `Current: ${selectedEmail}` : "New email to set"} style={inputStyle} />
+              <div style={{ position: "relative" }}>
+                <input type={showPassword ? "text" : "password"} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="New password to set" style={{ ...inputStyle, paddingRight: 70 }} />
+                <button type="button" onClick={() => setShowPassword(value => !value)} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "rgba(255,255,255,0.08)", color: palette.text, border: `1px solid ${palette.line}`, borderRadius: 10, padding: "6px 9px", fontSize: 11, cursor: "pointer" }}>
+                  {showPassword ? "Hide" : "Show"}
+                </button>
+              </div>
+              <button onClick={handleUpdateUserAccount} style={authBtnStyle}>Update</button>
+            </div>
+            {message && <div style={{ marginTop: 10, fontSize: 12, color: message.includes("updated") ? "#4ade80" : "#E63946" }}>{message}</div>}
+            <div style={{ marginTop: 10, color: palette.muted, fontSize: 12, lineHeight: 1.5 }}>
+              Emails are loaded from Supabase Auth. Passwords cannot be viewed; type a new password only when you want to replace it.
+            </div>
+            {authEmailError && (
+              <div style={{ marginTop: 10, color: "#F2C36B", fontSize: 12, lineHeight: 1.5 }}>
+                Email lookup failed: {authEmailError}. Deploy the admin-update-email Edge Function and set SUPABASE_SERVICE_ROLE_KEY, or add emails to profiles.email as a fallback.
+              </div>
+            )}
+          </div>
+
+          <h3 style={{ margin: "0 0 12px", fontSize: 14 }}>All Users</h3>
+          {loading ? <div style={{ color: palette.muted, marginBottom: 22 }}>Loading users...</div> : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14, marginBottom: 26 }}>
+              {profiles.map((person) => (
+                <div key={person.id} onClick={() => selectAdminUser(person)} style={{ padding: 14, border: effectiveUserId === person.id ? `1px solid ${palette.mint}` : `1px solid ${palette.line}`, borderRadius: 16, background: effectiveUserId === person.id ? "rgba(66,217,184,0.1)" : "rgba(255,255,255,0.055)", display: "flex", gap: 12, alignItems: "center", cursor: "pointer" }}>
+                  <div onClick={(e) => { e.stopPropagation(); setPreviewProfile(person); }} title="View profile picture" style={{
+                    width: 42, height: 42, borderRadius: "50%", flexShrink: 0,
+                    background: person.avatar_url ? `url(${person.avatar_url}) center/cover` : `linear-gradient(135deg, ${palette.accent}, ${palette.sky})`,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontWeight: 800, cursor: "zoom-in",
+                  }}>
+                    {!person.avatar_url && (person.username?.charAt(0).toUpperCase() || "?")}
+                  </div>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontWeight: 800, fontSize: 13 }}>@{person.username || "unknown"}</div>
+                    <div style={{ color: palette.muted, fontSize: 11, marginTop: 2 }}>{person.role || "user"} - {userEmail(person) || "email unavailable"}</div>
+                    <div style={{ color: palette.muted, fontSize: 11, marginTop: 2 }}>{uploadCounts.get(person.id) || 0} uploads - password can be reset only</div>
+                    <div style={{ color: "rgba(247,243,234,0.36)", fontSize: 10, marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{person.id}</div>
+                  </div>
+                  <button onClick={(e) => { e.stopPropagation(); selectAdminUser(person); }} style={{ ...secondaryBtnStyle, padding: "8px 10px", fontSize: 11, flexShrink: 0 }}>Select</button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 12 }}>
+            <h3 style={{ margin: 0, fontSize: 14 }}>{selectedUser ? `Uploads by @${selectedUser.username || "unknown"}` : "All Uploads"}</h3>
+            {effectiveUserId && <button onClick={() => { setSelectedUserId(""); setUserId(""); }} style={{ ...secondaryBtnStyle, padding: "8px 10px", fontSize: 12 }}>Show All Uploads</button>}
+          </div>
+          {loading ? <div style={{ color: palette.muted }}>Loading admin data...</div> : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 14 }}>
+              {filteredUploads.map((item) => (
+                <div key={item.id} style={{ border: `1px solid ${palette.line}`, borderRadius: 16, overflow: "hidden", background: "rgba(255,255,255,0.055)" }}>
+                  <div style={{ height: 130, background: "rgba(255,255,255,0.05)" }}>
+                    {item.thumb && <img src={item.thumb} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+                  </div>
+                  <div style={{ padding: 12 }}>
+                    <div style={{ fontWeight: 800, fontSize: 13 }}>{item.place || "Unknown"}</div>
+                    <div style={{ color: palette.muted, fontSize: 11, marginTop: 4 }}>@{item.profile?.username || "unknown"} · {item.file_name || "photo"}</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
+                      <button onClick={() => handleUserIdChange(item.user_id)} style={{ ...secondaryBtnStyle, width: "100%", padding: "9px 10px", fontSize: 12 }}>Use ID</button>
+                      <button onClick={() => handleDeleteAdminUpload(item)} style={{ ...dangerBtnStyle, width: "100%", padding: "9px 10px", fontSize: 12 }}>Delete</button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Lightbox({ pin, onClose, onDelete }) {
   if (!pin) return null;
   return (
@@ -358,11 +569,13 @@ function Lightbox({ pin, onClose, onDelete }) {
 // ─── Auth Screen ───
 function AuthScreen({ onAuth }) {
   const [isLogin, setIsLogin] = useState(true);
+  const [forgotMode, setForgotMode] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [confirmSent, setConfirmSent] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
 
   const handleSubmit = async () => {
     setError(""); setLoading(true);
@@ -381,6 +594,40 @@ function AuthScreen({ onAuth }) {
     } catch { setError("Something went wrong."); }
     setLoading(false);
   };
+
+  const handleForgotPassword = async () => {
+    setError("");
+    if (!email) { setError("Enter your email address first"); return; }
+    setLoading(true);
+    const { error: e } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin,
+    });
+    if (e) setError(e.message);
+    else setResetSent(true);
+    setLoading(false);
+  };
+
+  if (forgotMode || resetSent) return (
+    <div style={authContainerStyle}>
+      <Fonts />
+      <div style={authCardStyle}>
+        <div style={{ textAlign: "center", marginBottom: 28 }}><BrandLockup /></div>
+        <h2 style={authTitleStyle}>{resetSent ? "Check your email" : "Reset password"}</h2>
+        {resetSent ? (
+          <p style={{ opacity: 0.55, fontSize: 14, textAlign: "center", lineHeight: 1.6 }}>
+            We sent a password reset link to <strong>{email}</strong>.
+          </p>
+        ) : (
+          <>
+            <input type="email" placeholder="Email address" value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleForgotPassword()} style={inputStyle} />
+            {error && <div style={{ background: "rgba(230,57,70,0.1)", border: "1px solid rgba(230,57,70,0.3)", color: "#E63946", padding: "10px 14px", borderRadius: 10, fontSize: 13, marginTop: 12 }}>{error}</div>}
+            <button onClick={handleForgotPassword} disabled={loading} style={{ ...authBtnStyle, marginTop: 16, opacity: loading ? 0.6 : 1 }}>{loading ? "Sending..." : "Send Reset Link"}</button>
+          </>
+        )}
+        <button onClick={() => { setForgotMode(false); setResetSent(false); setError(""); }} style={{ ...secondaryBtnStyle, width: "100%", marginTop: 14 }}>Back to Login</button>
+      </div>
+    </div>
+  );
 
   if (confirmSent) return (
     <div style={authContainerStyle}>
@@ -418,12 +665,47 @@ function AuthScreen({ onAuth }) {
             {isLogin ? "Sign Up" : "Log In"}
           </button>
         </div>
+        {isLogin && <button onClick={() => { setForgotMode(true); setError(""); }} style={{ width: "100%", marginTop: 14, background: "none", border: "none", color: palette.mint, cursor: "pointer", fontSize: 13, fontWeight: 700, fontFamily: "'DM Sans', sans-serif" }}>Forgot password?</button>}
       </div>
     </div>
   );
 }
 
 // ─── Username Setup Screen ───
+function PasswordResetScreen({ onComplete }) {
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handlePasswordReset = async () => {
+    setError("");
+    if (password.length < 6) { setError("Password must be at least 6 characters"); return; }
+    if (password !== confirmPassword) { setError("Passwords do not match"); return; }
+    setLoading(true);
+    const { error: e } = await supabase.auth.updateUser({ password });
+    if (e) setError(e.message);
+    else onComplete();
+    setLoading(false);
+  };
+
+  return (
+    <div style={authContainerStyle}>
+      <Fonts />
+      <div style={authCardStyle}>
+        <div style={{ textAlign: "center", marginBottom: 28 }}><BrandLockup /></div>
+        <h2 style={authTitleStyle}>Choose a new password</h2>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <input type="password" placeholder="New password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handlePasswordReset()} style={inputStyle} />
+          <input type="password" placeholder="Confirm password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handlePasswordReset()} style={inputStyle} />
+        </div>
+        {error && <div style={{ background: "rgba(230,57,70,0.1)", border: "1px solid rgba(230,57,70,0.3)", color: "#E63946", padding: "10px 14px", borderRadius: 10, fontSize: 13, marginTop: 12 }}>{error}</div>}
+        <button onClick={handlePasswordReset} disabled={loading} style={{ ...authBtnStyle, marginTop: 16, opacity: loading ? 0.6 : 1 }}>{loading ? "Updating..." : "Update Password"}</button>
+      </div>
+    </div>
+  );
+}
+
 function UsernameSetup({ user, onComplete }) {
   const [username, setUsername] = useState("");
   const [avatar, setAvatar] = useState(null);
@@ -540,6 +822,10 @@ function EditProfile({ profile, onSave, onClose }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordMessage, setPasswordMessage] = useState("");
+  const [passwordLoading, setPasswordLoading] = useState(false);
   const fileRef = useRef(null);
   const origUsername = profile.username;
 
@@ -585,6 +871,21 @@ function EditProfile({ profile, onSave, onClose }) {
     onSave({ ...profile, username, avatar_url: avatar });
   };
 
+  const handleChangePassword = async () => {
+    setPasswordMessage("");
+    if (newPassword.length < 6) { setPasswordMessage("Password must be at least 6 characters"); return; }
+    if (newPassword !== confirmPassword) { setPasswordMessage("Passwords do not match"); return; }
+    setPasswordLoading(true);
+    const { error: e } = await supabase.auth.updateUser({ password: newPassword });
+    if (e) setPasswordMessage(e.message);
+    else {
+      setNewPassword("");
+      setConfirmPassword("");
+      setPasswordMessage("Password updated");
+    }
+    setPasswordLoading(false);
+  };
+
   return (
     <div onClick={onClose} style={{
       position: "fixed", inset: 0, zIndex: 900, background: "rgba(0,0,0,0.7)",
@@ -592,7 +893,7 @@ function EditProfile({ profile, onSave, onClose }) {
       backdropFilter: "blur(8px)",
     }}>
       <div onClick={(e) => e.stopPropagation()} style={{
-        ...authCardStyle, maxWidth: 420, animation: "fadeIn 0.2s ease",
+        ...authCardStyle, maxWidth: 420, maxHeight: "calc(100vh - 40px)", overflowY: "auto", animation: "fadeIn 0.2s ease",
       }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
           <h2 style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 20, fontWeight: 700, margin: 0 }}>Edit Profile</h2>
@@ -624,6 +925,21 @@ function EditProfile({ profile, onSave, onClose }) {
         {checking && <div style={{ fontSize: 12, opacity: 0.4, marginTop: 6 }}>Checking availability...</div>}
         {error && <div style={{ background: "rgba(230,57,70,0.1)", border: "1px solid rgba(230,57,70,0.3)", color: "#E63946", padding: "10px 14px", borderRadius: 10, fontSize: 13, marginTop: 12 }}>{error}</div>}
         {!error && username.length >= 3 && !checking && username !== origUsername && <div style={{ fontSize: 12, color: "#4ade80", marginTop: 6 }}>✓ Username available</div>}
+
+        <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "22px 0" }} />
+        <h3 style={{ margin: "0 0 12px", fontSize: 13, letterSpacing: "0.6px", opacity: 0.6, fontWeight: 700 }}>CHANGE PASSWORD</h3>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <input type="password" placeholder="New password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} style={inputStyle} />
+          <input type="password" placeholder="Confirm new password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} style={inputStyle} />
+        </div>
+        {passwordMessage && <div style={{ color: passwordMessage === "Password updated" ? "#4ade80" : "#E63946", fontSize: 12, marginTop: 8 }}>{passwordMessage}</div>}
+        <button onClick={handleChangePassword} disabled={passwordLoading || !newPassword || !confirmPassword} style={{
+          ...secondaryBtnStyle, width: "100%", marginTop: 12,
+          opacity: (passwordLoading || !newPassword || !confirmPassword) ? 0.45 : 1,
+          cursor: (passwordLoading || !newPassword || !confirmPassword) ? "not-allowed" : "pointer",
+        }}>
+          {passwordLoading ? "Updating..." : "Change Password"}
+        </button>
 
         <div style={{ display: "flex", gap: 12, marginTop: 20 }}>
           <button onClick={onClose} style={{ ...authBtnStyle, background: "rgba(255,255,255,0.06)", boxShadow: "none", flex: 1 }}>Cancel</button>
@@ -726,6 +1042,7 @@ const inputStyle = { width: "100%", padding: "14px 16px", background: "rgba(255,
 const authBtnStyle = { width: "100%", padding: "14px", background: `linear-gradient(135deg, ${palette.accent}, ${palette.accentDark})`, color: "white", border: "none", borderRadius: 14, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", boxShadow: "0 12px 28px rgba(255,107,74,0.28)" };
 const secondaryBtnStyle = { padding: "12px 16px", background: "rgba(255,255,255,0.09)", color: palette.text, border: `1px solid ${palette.line}`, borderRadius: 14, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif" };
 const dangerBtnStyle = { padding: "9px 12px", background: "rgba(255,107,74,0.16)", color: "#FFB19F", border: "1px solid rgba(255,107,74,0.35)", borderRadius: 12, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif" };
+const adminStatStyle = { padding: 16, borderRadius: 16, background: "rgba(255,255,255,0.06)", border: `1px solid ${palette.line}`, display: "flex", flexDirection: "column", gap: 4 };
 
 function Fonts() { return <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet" />; }
 
@@ -735,7 +1052,9 @@ export default function App() {
   const [profile, setProfile] = useState(null);
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [needsUsername, setNeedsUsername] = useState(false);
+  const [needsPasswordReset, setNeedsPasswordReset] = useState(false);
   const [showEditProfile, setShowEditProfile] = useState(false);
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [showProfilePreview, setShowProfilePreview] = useState(false);
   const [lightboxPin, setLightboxPin] = useState(null);
   const [pins, setPins] = useState([]);
@@ -752,13 +1071,15 @@ export default function App() {
     countries: new Set(pins.map(p => p.country).filter(Boolean)).size,
     cities: new Set(pins.map(p => p.city).filter(Boolean)).size,
   }), [pins]);
+  const isAdmin = profile?.role === "admin" || ADMIN_EMAILS.includes(user?.email?.toLowerCase() || "");
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user || null);
       setCheckingAuth(false);
     });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "PASSWORD_RECOVERY") setNeedsPasswordReset(true);
       setUser(session?.user || null);
     });
     return () => subscription.unsubscribe();
@@ -857,6 +1178,7 @@ export default function App() {
   );
 
   if (!user) return <AuthScreen onAuth={setUser} />;
+  if (needsPasswordReset) return <PasswordResetScreen onComplete={() => setNeedsPasswordReset(false)} />;
   if (needsUsername) return <UsernameSetup user={user} onComplete={(p) => { setProfile({ id: user.id, ...p }); setNeedsUsername(false); }} />;
 
   return (
@@ -869,6 +1191,7 @@ export default function App() {
 
       {/* Edit Profile */}
       {showEditProfile && profile && <EditProfile profile={profile} onSave={(p) => { setProfile(p); setShowEditProfile(false); }} onClose={() => setShowEditProfile(false)} />}
+      {showAdminPanel && isAdmin && <AdminPanel currentUser={user} onClose={() => setShowAdminPanel(false)} />}
 
       {/* Header */}
       <header style={{ padding: "14px 28px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "relative", zIndex: 10, borderBottom: `1px solid ${palette.line}`, background: "rgba(17,24,39,0.72)", backdropFilter: "blur(18px)" }}>
@@ -908,6 +1231,14 @@ export default function App() {
                 borderRadius: 16, overflow: "hidden", boxShadow: "0 18px 46px rgba(0,0,0,0.38)",
                 backdropFilter: "blur(12px)", zIndex: 100,
               }}>
+                {isAdmin && (
+                  <>
+                    <button onClick={() => { setShowAdminPanel(true); setShowUserMenu(false); }} style={menuItemStyle}>
+                      <span>★</span> Admin Dashboard
+                    </button>
+                    <div style={{ height: 1, background: "rgba(255,255,255,0.06)" }} />
+                  </>
+                )}
                 <button onClick={() => { setShowEditProfile(true); setShowUserMenu(false); }} style={menuItemStyle}>
                   <span>✎</span> Edit Profile
                 </button>
