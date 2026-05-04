@@ -80,12 +80,15 @@ function groupHeatPoints(rows) {
   for (const row of rows) {
     if (!Number.isFinite(row.lat) || !Number.isFinite(row.lon)) continue;
     const key = `${row.lat.toFixed(1)},${row.lon.toFixed(1)}`;
-    const current = grouped.get(key) || { lat: 0, lon: 0, count: 0, place: row.place || "Popular place" };
+    const current = grouped.get(key) || { lat: 0, lon: 0, count: 0, place: row.place || "Popular place", thumb: "", fileName: "", sampleId: null };
     grouped.set(key, {
       lat: current.lat + row.lat,
       lon: current.lon + row.lon,
       count: current.count + 1,
       place: current.place || row.place || "Popular place",
+      thumb: current.thumb || row.thumb || row.photo_url || "",
+      fileName: current.fileName || row.file_name || "",
+      sampleId: current.sampleId || row.id || null,
     });
   }
   return [...grouped.values()].map(point => ({
@@ -574,7 +577,7 @@ function Lightbox({ pin, onClose, onDelete }) {
           <div style={{ fontSize: 18, fontWeight: 700, fontFamily: "'DM Sans', sans-serif" }}>{pin.place}</div>
           {pin.date && <div style={{ fontSize: 13, opacity: 0.7, marginTop: 4, fontFamily: "'DM Sans', sans-serif" }}>{pin.date}</div>}
           <div style={{ fontSize: 12, opacity: 0.5, marginTop: 2, fontFamily: "'DM Sans', sans-serif" }}>{pin.fileName}</div>
-          <button onClick={() => onDelete?.(pin)} style={{ ...dangerBtnStyle, marginTop: 14 }}>Delete Photo</button>
+          {onDelete && <button onClick={() => onDelete(pin)} style={{ ...dangerBtnStyle, marginTop: 14 }}>Delete Photo</button>}
         </div>
         <button onClick={onClose} style={{
           position: "absolute", top: 12, right: 12, width: 36, height: 36,
@@ -1060,7 +1063,7 @@ function EditProfile({ profile, onSave, onClose }) {
 }
 
 // ─── Map Component ───
-function SlippyMap({ pins, center, zoom, onPinClick, heatPoints = [], onMapClick, placementMode = false }) {
+function SlippyMap({ pins, center, zoom, onPinClick, heatPoints = [], onHeatPointClick, onMapClick, placementMode = false, currentLocation = null }) {
   const containerRef = useRef(null);
   const dragging = useRef(false);
   const dragMoved = useRef(false);
@@ -1096,6 +1099,10 @@ function SlippyMap({ pins, center, zoom, onPinClick, heatPoints = [], onMapClick
     const pp = degToNum(p.lat, p.lon, z);
     return { ...p, x: pp.x * tileSize - tlPX, y: pp.y * tileSize - tlPY, strength: (p.count || 1) / maxHeat };
   });
+  const currentLocationPos = currentLocation ? (() => {
+    const pp = degToNum(currentLocation.lat, currentLocation.lon, z);
+    return { ...currentLocation, x: pp.x * tileSize - tlPX, y: pp.y * tileSize - tlPY };
+  })() : null;
 
   const handlePointerDown = (e) => { dragging.current = true; setIsDragging(true); dragMoved.current = false; lastPos.current = { x: e.clientX, y: e.clientY }; e.currentTarget.setPointerCapture(e.pointerId); };
   const handlePointerMove = (e) => {
@@ -1123,7 +1130,7 @@ function SlippyMap({ pins, center, zoom, onPinClick, heatPoints = [], onMapClick
       onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onWheel={handleWheel} onClick={handleContainerClick}>
       {tiles.map((t) => <img key={t.key} src={t.url} alt="" style={{ position: "absolute", left: t.left, top: t.top, width: tileSize, height: tileSize, pointerEvents: "none" }} draggable={false} />)}
       {heatPos.map((point, i) => (
-        <div key={`${point.lat}-${point.lon}-${i}`} title={`${point.place}: ${point.count} uploads`} style={{
+        <div key={`${point.lat}-${point.lon}-${i}`} title={`${point.place}: ${point.count} public uploads`} onClick={(e) => { e.stopPropagation(); if (!dragMoved.current && point.thumb && onHeatPointClick) onHeatPointClick(point); }} style={{
           position: "absolute",
           left: point.x,
           top: point.y,
@@ -1133,10 +1140,79 @@ function SlippyMap({ pins, center, zoom, onPinClick, heatPoints = [], onMapClick
           borderRadius: "50%",
           background: `radial-gradient(circle, rgba(255,107,74,${0.52 + point.strength * 0.24}) 0%, rgba(242,195,107,${0.24 + point.strength * 0.18}) 42%, rgba(66,217,184,0) 72%)`,
           mixBlendMode: "multiply",
-          pointerEvents: "none",
+          pointerEvents: point.thumb && onHeatPointClick ? "auto" : "none",
+          cursor: point.thumb && onHeatPointClick ? "zoom-in" : "default",
           zIndex: 5,
-        }} />
+        }}>
+          {point.thumb && (
+            <div style={{
+              position: "absolute",
+              left: "50%",
+              top: "50%",
+              width: 38,
+              height: 38,
+              transform: "translate(-50%, -50%)",
+              borderRadius: "50%",
+              overflow: "hidden",
+              border: "2px solid white",
+              boxShadow: "0 8px 20px rgba(17,24,39,0.28)",
+              background: "rgba(17,24,39,0.55)",
+            }}>
+              <img src={point.thumb} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} draggable={false} />
+            </div>
+          )}
+        </div>
       ))}
+      {currentLocationPos && (
+        <div
+          title="Your current location"
+          style={{
+            position: "absolute",
+            left: currentLocationPos.x,
+            top: currentLocationPos.y,
+            transform: "translate(-50%, -50%)",
+            zIndex: 18,
+            pointerEvents: "none",
+          }}
+        >
+          <div style={{
+            width: 48,
+            height: 48,
+            borderRadius: "50%",
+            background: "rgba(66,217,184,0.18)",
+            border: "1px solid rgba(66,217,184,0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            boxShadow: "0 0 0 10px rgba(66,217,184,0.08)",
+          }}>
+            <div style={{
+              width: 18,
+              height: 18,
+              borderRadius: "50%",
+              background: palette.mint,
+              border: "3px solid white",
+              boxShadow: "0 8px 22px rgba(17,24,39,0.35)",
+            }} />
+          </div>
+          <div style={{
+            position: "absolute",
+            left: "50%",
+            top: 54,
+            transform: "translateX(-50%)",
+            background: "rgba(17,24,39,0.9)",
+            color: palette.text,
+            border: `1px solid ${palette.line}`,
+            borderRadius: 10,
+            padding: "5px 8px",
+            fontSize: 11,
+            fontWeight: 800,
+            whiteSpace: "nowrap",
+          }}>
+            You are here
+          </div>
+        </div>
+      )}
       {pinPos.map((p, i) => (
         <div key={p.id || i} style={{ position: "absolute", left: p.x, top: p.y, transform: "translate(-50%, -100%)", zIndex: hoveredPin === i ? 20 : 10 }}
           onPointerEnter={() => setHoveredPin(i)} onPointerLeave={() => setHoveredPin(null)}
@@ -1170,7 +1246,7 @@ function TutorialModal({ onClose }) {
   const steps = [
     { title: "Add travel photos", body: "Upload photos from your trips. Footprint reads GPS metadata and places each photo where it was taken." },
     { title: "Explore your map", body: "Click map pins or timeline photos to view memories bigger, then delete individual uploads when you need to clean up." },
-    { title: "Find popular places", body: "Use Popular Places to see heatmap areas from everyone’s uploaded locations." },
+    { title: "Find popular places", body: "Use Popular Places to see heatmap areas from photos people chose to share publicly." },
     { title: "Make it yours", body: "Open Edit Profile to change your avatar, generate a username, or update your password." },
   ];
   return (
@@ -1236,6 +1312,8 @@ export default function App() {
   const [showHeatmap, setShowHeatmap] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [pendingPhotos, setPendingPhotos] = useState([]);
+  const [currentLocation, setCurrentLocation] = useState(null);
+  const [uploadVisibility, setUploadVisibility] = useState("private");
   const [dragOver, setDragOver] = useState(false);
   const [center, setCenter] = useState({ lat: 1.35, lon: 103.82 });
   const [zoom, setZoom] = useState(3);
@@ -1243,6 +1321,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showTimeline, setShowTimeline] = useState(false); // mobile sidebar toggle
+  const [publicSamplePin, setPublicSamplePin] = useState(null);
   const isMobile = useIsMobile();
   const fileInputRef = useRef(null);
 
@@ -1253,17 +1332,39 @@ export default function App() {
   const publicHeatPoints = useMemo(() => groupHeatPoints(allLocations), [allLocations]);
   const isAdmin = profile?.role === "admin" || ADMIN_EMAILS.includes(user?.email?.toLowerCase() || "");
 
+  const locateCurrentUser = useCallback(async ({ centerMap = false, timeout = 8000 } = {}) => {
+    if (!navigator.geolocation) return null;
+    const pos = await new Promise(resolve => {
+      navigator.geolocation.getCurrentPosition(p => resolve(p), () => resolve(null), { timeout });
+    });
+    if (!pos) return null;
+
+    const geo = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
+    const location = { lat: pos.coords.latitude, lon: pos.coords.longitude, place: geo.display };
+    setCurrentLocation(location);
+    if (centerMap) {
+      setCenter({ lat: location.lat, lon: location.lon });
+      setZoom(14);
+    }
+    return location;
+  }, []);
+
   const loadGlobalHeatmapLocations = useCallback(async () => {
     const { data, error } = await supabase.rpc("global_heatmap_locations");
     if (!error) {
-      setAllLocations(data || []);
-      return data || [];
+      const rows = await Promise.all((data || []).map(async (row) => ({
+        ...row,
+        thumb: await displayablePhotoUrl(row.photo_url || null, row.file_name || ""),
+      })));
+      setAllLocations(rows);
+      return rows;
     }
 
     console.warn("Global heatmap RPC unavailable; using direct locations query.", error);
     const { data: fallbackRows, error: fallbackError } = await supabase
       .from("locations")
-      .select("id, lat, lon, place")
+      .select("id, lat, lon, place, photo_url, file_name")
+      .eq("is_public", true)
       .not("lat", "is", null)
       .not("lon", "is", null)
       .order("created_at", { ascending: false });
@@ -1274,8 +1375,12 @@ export default function App() {
       return [];
     }
 
-    setAllLocations(fallbackRows || []);
-    return fallbackRows || [];
+    const rows = await Promise.all((fallbackRows || []).map(async (row) => ({
+      ...row,
+      thumb: await displayablePhotoUrl(row.photo_url || null, row.file_name || ""),
+    })));
+    setAllLocations(rows);
+    return rows;
   }, []);
 
   useEffect(() => {
@@ -1285,6 +1390,12 @@ export default function App() {
     const id = window.setTimeout(() => setShowTutorial(true), 0);
     return () => window.clearTimeout(id);
   }, [user, needsUsername]);
+
+  useEffect(() => {
+    if (!user || needsUsername) return;
+    const id = window.setTimeout(() => locateCurrentUser({ centerMap: true }), 0);
+    return () => window.clearTimeout(id);
+  }, [user, needsUsername, locateCurrentUser]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -1301,7 +1412,7 @@ export default function App() {
   // Load profile when user logs in
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (!user) { setProfile(null); setNeedsUsername(false); setPins([]); setAllLocations([]); return; }
+    if (!user) { setProfile(null); setNeedsUsername(false); setPins([]); setAllLocations([]); setCurrentLocation(null); return; }
     async function loadProfile() {
       const { data, error } = await supabase.from("profiles").select("*").eq("id", user.id).single();
       if (error || !data) { setNeedsUsername(true); return; }
@@ -1321,7 +1432,7 @@ export default function App() {
         loadGlobalHeatmapLocations(),
       ]);
       if (data && data.length > 0) {
-        const loaded = await Promise.all(data.map(async (r) => ({ id: r.id, lat: r.lat, lon: r.lon, place: r.place || "Unknown", city: r.city || "", country: r.country || "", date: r.date || null, thumb: await displayablePhotoUrl(r.photo_url || null, r.file_name || ""), fileName: r.file_name || "" })));
+        const loaded = await Promise.all(data.map(async (r) => ({ id: r.id, lat: r.lat, lon: r.lon, place: r.place || "Unknown", city: r.city || "", country: r.country || "", date: r.date || null, thumb: await displayablePhotoUrl(r.photo_url || null, r.file_name || ""), fileName: r.file_name || "", isPublic: Boolean(r.is_public) })));
         setPins(loaded); fitMapToPins(loaded);
       }
       setLoading(false);
@@ -1340,7 +1451,7 @@ export default function App() {
     }
   }
 
-  const savePhotoAt = useCallback(async (file, lat, lon, thumb, date = null) => {
+  const savePhotoAt = useCallback(async (file, lat, lon, thumb, date = null, isPublic = false) => {
     const geo = await reverseGeocode(lat, lon);
     const b64 = thumb || await safePhotoToDisplayDataUrl(file);
     if (!b64) {
@@ -1359,24 +1470,28 @@ export default function App() {
       photo_url: b64,
       file_name: file.name,
       user_id: user.id,
+      is_public: isPublic,
     }).select().single();
     if (error) {
       alert(error.message);
       return null;
     }
-    const pin = { id: data.id, lat, lon, place: geo.display || "Unknown", city: geo.city, country: geo.country, date, thumb: b64, fileName: file.name };
+    const pin = { id: data.id, lat, lon, place: geo.display || "Unknown", city: geo.city, country: geo.country, date, thumb: b64, fileName: file.name, isPublic };
     setPins(prev => {
       const all = [...prev, pin];
       fitMapToPins(all);
       return all;
     });
-    setAllLocations(prev => [{ id: data.id, lat, lon, place: geo.display || "Unknown" }, ...prev]);
+    if (isPublic) {
+      setAllLocations(prev => [{ id: data.id, lat, lon, place: geo.display || "Unknown", thumb: b64, photo_url: b64, file_name: file.name }, ...prev]);
+    }
     return pin;
   }, [user]);
 
   const processFiles = useCallback(async (files) => {
     if (!user) return;
     setProcessing(true);
+    const isPublicUpload = uploadVisibility === "public";
     await new Promise(resolve => setTimeout(resolve, 30));
     try {
       const imgs = Array.from(files).filter(isPhotoFile);
@@ -1385,7 +1500,7 @@ export default function App() {
         try {
           const gps = await parseExifGPS(file);
           if (gps?.lat && gps?.lon) {
-            await savePhotoAt(file, gps.lat, gps.lon, null, gps.date || null);
+            await savePhotoAt(file, gps.lat, gps.lon, null, gps.date || null, isPublicUpload);
           } else {
             noGps.push(file);
           }
@@ -1394,22 +1509,14 @@ export default function App() {
         }
       }
       if (noGps.length > 0) {
-        const pos = await Promise.race([
-          new Promise(resolve => {
-            if (!navigator.geolocation) return resolve(null);
-            navigator.geolocation.getCurrentPosition(p => resolve(p), () => resolve(null), { timeout: 6000 });
-          }),
+        const suggestion = await Promise.race([
+          locateCurrentUser({ centerMap: true, timeout: 6000 }),
           new Promise(resolve => setTimeout(() => resolve(null), 7000)),
         ]);
-        let suggestion = null;
-        if (pos) {
-          const geo = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
-          suggestion = { lat: pos.coords.latitude, lon: pos.coords.longitude, place: geo.display };
-        }
         const queued = (await Promise.all(noGps.map(async file => {
           const thumb = await safePhotoToDisplayDataUrl(file);
           if (!thumb) return null;
-          return { file, thumb, fileName: file.name, suggestion };
+          return { file, thumb, fileName: file.name, suggestion, isPublic: isPublicUpload };
         }))).filter(Boolean);
         setPendingPhotos(prev => [...prev, ...queued]);
         if (queued.length === 0) alert("Could not load the selected image. For HEIC photos, try exporting as JPG or uploading the original photo file.");
@@ -1418,7 +1525,7 @@ export default function App() {
     } finally {
       setProcessing(false);
     }
-  }, [user, savePhotoAt]);
+  }, [user, savePhotoAt, locateCurrentUser, uploadVisibility]);
 
   const clearAll = async () => {
     if (pins.length > 0) await supabase.from("locations").delete().in("id", pins.map(p => p.id));
@@ -1463,32 +1570,29 @@ export default function App() {
     if (pendingPhotos.length === 0) return;
     const [current, ...rest] = pendingPhotos;
     setPendingPhotos(rest);
-    await savePhotoAt(current.file, geo.lat, geo.lon, current.thumb);
+    await savePhotoAt(current.file, geo.lat, geo.lon, current.thumb, null, Boolean(current.isPublic));
   }, [pendingPhotos, savePhotoAt]);
 
   const handleUseMyLocation = useCallback(async () => {
     if (pendingPhotos.length === 0 || !navigator.geolocation) return;
-    const pos = await new Promise(resolve => {
-      navigator.geolocation.getCurrentPosition(p => resolve(p), () => resolve(null), { timeout: 8000 });
-    });
-    if (!pos) {
+    const location = await locateCurrentUser({ centerMap: true });
+    if (!location) {
       alert("Could not get your current location. Tap the map to place this photo.");
       return;
     }
-    const geo = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
     setPendingPhotos(prev => {
       const [first, ...rest] = prev;
       if (!first) return prev;
-      return [{ ...first, suggestion: { lat: pos.coords.latitude, lon: pos.coords.longitude, place: geo.display } }, ...rest];
+      return [{ ...first, suggestion: location }, ...rest];
     });
-  }, [pendingPhotos]);
+  }, [pendingPhotos, locateCurrentUser]);
 
   const handleConfirmSuggestion = useCallback(async () => {
     if (pendingPhotos.length === 0) return;
     const [current, ...rest] = pendingPhotos;
     if (!current.suggestion) return;
     setPendingPhotos(rest);
-    await savePhotoAt(current.file, current.suggestion.lat, current.suggestion.lon, current.thumb);
+    await savePhotoAt(current.file, current.suggestion.lat, current.suggestion.lon, current.thumb, null, Boolean(current.isPublic));
   }, [pendingPhotos, savePhotoAt]);
 
   const handleDismissSuggestion = useCallback(() => {
@@ -1497,6 +1601,10 @@ export default function App() {
       if (!first) return prev;
       return [{ ...first, suggestion: null }, ...rest];
     });
+  }, []);
+
+  const handleSkipPendingPhoto = useCallback(() => {
+    setPendingPhotos(prev => prev.slice(1));
   }, []);
 
   const handleLogout = async () => { await supabase.auth.signOut(); setPins([]); setUser(null); setProfile(null); };
@@ -1523,6 +1631,7 @@ export default function App() {
 
       {/* Lightbox */}
       <Lightbox pin={lightboxPin} onClose={() => setLightboxPin(null)} onDelete={deletePin} />
+      <Lightbox pin={publicSamplePin} onClose={() => setPublicSamplePin(null)} />
       <ProfileLightbox profile={showProfilePreview ? profile : null} user={user} onClose={() => setShowProfilePreview(false)} />
       {showTutorial && <TutorialModal onClose={() => setShowTutorial(false)} />}
 
@@ -1615,12 +1724,12 @@ export default function App() {
                 <>
                   <div style={{ fontSize: 13, fontWeight: 700, color: palette.mint }}>Is this location correct?</div>
                   <div style={{ fontSize: 12, opacity: 0.8, marginTop: 1 }}>{cur.suggestion.place}</div>
-                  <div style={{ fontSize: 10, opacity: 0.45, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cur.fileName}</div>
+                  <div style={{ fontSize: 10, opacity: 0.45, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cur.fileName} · {cur.isPublic ? "public" : "private"}</div>
                 </>
               ) : (
                 <>
                   <div style={{ fontSize: 13, fontWeight: 700, color: palette.gold }}>No GPS — tap map to place</div>
-                  <div style={{ fontSize: 10, opacity: 0.45, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cur.fileName}{pendingPhotos.length > 1 ? ` (+${pendingPhotos.length - 1} more)` : ""}</div>
+                  <div style={{ fontSize: 10, opacity: 0.45, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cur.fileName} · {cur.isPublic ? "public" : "private"}{pendingPhotos.length > 1 ? ` (+${pendingPhotos.length - 1} more)` : ""}</div>
                 </>
               )}
             </div>
@@ -1633,7 +1742,7 @@ export default function App() {
               ) : (
                 navigator.geolocation && <button onClick={handleUseMyLocation} style={{ ...secondaryBtnStyle, padding: "8px 10px", fontSize: 12, border: `1px solid ${palette.mint}`, color: palette.mint }}>📍 My location</button>
               )}
-              <button onClick={() => setPendingPhotos(prev => prev.slice(1))} style={{ ...secondaryBtnStyle, padding: "8px 10px", fontSize: 12, opacity: 0.6 }}>Skip</button>
+              <button onClick={handleSkipPendingPhoto} style={{ ...secondaryBtnStyle, padding: "8px 10px", fontSize: 12, opacity: 0.6 }}>Skip</button>
               <button onClick={() => setPendingPhotos([])} style={{ ...dangerBtnStyle, padding: "8px 10px", fontSize: 12 }}>✕</button>
             </div>
           </div>
@@ -1709,8 +1818,10 @@ export default function App() {
             center={center}
             zoom={zoom}
             onPinClick={(p) => setLightboxPin(p)}
+            onHeatPointClick={(point) => setPublicSamplePin({ id: point.sampleId, lat: point.lat, lon: point.lon, place: point.place, thumb: point.thumb, fileName: point.fileName || "Public upload" })}
             onMapClick={pendingPhotos.length > 0 ? handleMapClick : undefined}
             placementMode={pendingPhotos.length > 0}
+            currentLocation={currentLocation}
           />
 
           {loading && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 25, background: "rgba(10,10,15,0.8)" }}>
@@ -1731,6 +1842,22 @@ export default function App() {
 
           <div style={{ position: "absolute", top: 16, left: 16, zIndex: 30, display: "flex", gap: 10, flexWrap: "wrap" }}>
             {!isMobile && <button onClick={() => fileInputRef.current?.click()} style={{ background: `linear-gradient(135deg, ${palette.accent}, ${palette.accentDark})`, color: "white", border: "none", padding: "10px 18px", borderRadius: 14, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", boxShadow: "0 12px 28px rgba(255,107,74,0.25)", display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontSize: 18 }}>+</span> Add Photos</button>}
+            <div style={{ display: "flex", alignItems: "center", padding: 3, borderRadius: 14, background: "rgba(17,24,39,0.78)", border: `1px solid ${palette.line}`, boxShadow: "0 12px 28px rgba(0,0,0,0.18)" }}>
+              {["private", "public"].map(option => (
+                <button key={option} onClick={() => setUploadVisibility(option)} style={{
+                  border: "none",
+                  borderRadius: 11,
+                  padding: isMobile ? "8px 10px" : "8px 12px",
+                  background: uploadVisibility === option ? (option === "public" ? "rgba(66,217,184,0.24)" : "rgba(255,255,255,0.13)") : "transparent",
+                  color: uploadVisibility === option && option === "public" ? palette.mint : palette.text,
+                  fontSize: 12,
+                  fontWeight: 800,
+                  cursor: "pointer",
+                  fontFamily: "'DM Sans', sans-serif",
+                  textTransform: "capitalize",
+                }}>{option}</button>
+              ))}
+            </div>
             <button onClick={togglePopularPlaces} style={{ ...secondaryBtnStyle, padding: "10px 14px", background: showHeatmap ? "rgba(66,217,184,0.22)" : "rgba(17,24,39,0.78)", border: showHeatmap ? `1px solid ${palette.mint}` : `1px solid ${palette.line}`, boxShadow: "0 12px 28px rgba(0,0,0,0.18)" }}>
               {isMobile ? "Global" : "Global Popular Places"}
             </button>

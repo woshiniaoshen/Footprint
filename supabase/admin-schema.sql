@@ -4,15 +4,23 @@ add column if not exists role text not null default 'user';
 alter table public.profiles
 add column if not exists email text;
 
+alter table public.locations
+add column if not exists is_public boolean not null default false;
+
 create index if not exists profiles_role_idx on public.profiles(role);
 create index if not exists profiles_email_idx on public.profiles(email);
+create index if not exists locations_is_public_idx on public.locations(is_public);
+
+drop function if exists public.global_heatmap_locations();
 
 create or replace function public.global_heatmap_locations()
 returns table (
   id bigint,
   lat double precision,
   lon double precision,
-  place text
+  place text,
+  photo_url text,
+  file_name text
 )
 language sql
 security definer
@@ -22,10 +30,13 @@ as $$
     locations.id,
     locations.lat,
     locations.lon,
-    locations.place
+    locations.place,
+    locations.photo_url,
+    locations.file_name
   from public.locations
   where locations.lat is not null
     and locations.lon is not null
+    and locations.is_public = true
   order by locations.created_at desc;
 $$;
 
