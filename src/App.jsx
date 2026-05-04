@@ -295,10 +295,28 @@ function isHeicLike(file) {
   const name = file.name?.toLowerCase() || "";
   return file.type === "image/heic" || file.type === "image/heif" || name.endsWith(".heic") || name.endsWith(".heif");
 }
+function isMvimgFile(file) {
+  return file.name?.toLowerCase().startsWith("mvimg_");
+}
+async function extractJpegFromMotionPhoto(file) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      canvas.getContext("2d").drawImage(img, 0, 0);
+      canvas.toBlob((blob) => { URL.revokeObjectURL(url); resolve(blob || file); }, "image/jpeg", 0.92);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.src = url;
+  });
+}
 async function photoToDisplayDataUrl(file) {
-  if (!isHeicLike(file)) return fileToBase64(file);
-  const jpeg = await convertHeicToJpeg(file);
-  return fileToBase64(jpeg);
+  if (isHeicLike(file)) { const jpeg = await convertHeicToJpeg(file); return fileToBase64(jpeg); }
+  if (isMvimgFile(file)) { const jpeg = await extractJpegFromMotionPhoto(file); return fileToBase64(jpeg); }
+  return fileToBase64(file);
 }
 async function convertHeicToJpeg(blob) {
   const { default: heic2any } = await import("heic2any");
