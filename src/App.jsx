@@ -125,7 +125,14 @@ async function reverseGeocode(lat, lon) {
     return { city, country, display: city ? `${city}, ${country}` : country };
   } catch { return { city: "", country: "", display: `${lat.toFixed(2)}, ${lon.toFixed(2)}` }; }
 }
-function fileToBase64(file) { return new Promise((r) => { const rd = new FileReader(); rd.onload = () => r(rd.result); rd.readAsDataURL(file); }); }
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const rd = new FileReader();
+    rd.onload = () => resolve(rd.result);
+    rd.onerror = () => reject(rd.error || new Error("Could not read image"));
+    rd.readAsDataURL(file);
+  });
+}
 function isPhotoFile(file) {
   const name = file.name?.toLowerCase() || "";
   return file.type.startsWith("image/") || /\.(jpe?g|png|webp|heic|heif)$/i.test(name) || name.startsWith("mvimg_");
@@ -136,6 +143,9 @@ function isHeicLike(file) {
 }
 function isMvimgFile(file) {
   return file.name?.toLowerCase().startsWith("mvimg_");
+}
+function heicMimeHint(fileName = "", fallback = "image/heic") {
+  return fileName.toLowerCase().endsWith(".heif") ? "image/heif" : fallback;
 }
 async function extractJpegFromMotionPhoto(file) {
   return new Promise((resolve) => {
@@ -153,14 +163,31 @@ async function extractJpegFromMotionPhoto(file) {
   });
 }
 async function photoToDisplayDataUrl(file) {
-  if (isHeicLike(file)) { const jpeg = await convertHeicToJpeg(file); return fileToBase64(jpeg); }
+  if (isHeicLike(file)) {
+    const jpeg = await convertHeicToJpeg(file, heicMimeHint(file.name, file.type || "image/heic"));
+    return fileToBase64(jpeg);
+  }
   if (isMvimgFile(file)) { const jpeg = await extractJpegFromMotionPhoto(file); return fileToBase64(jpeg); }
   return fileToBase64(file);
 }
-async function convertHeicToJpeg(blob) {
+async function safePhotoToDisplayDataUrl(file) {
+  try {
+    return await photoToDisplayDataUrl(file);
+  } catch {
+    if (isHeicLike(file)) return "";
+    try {
+      return await fileToBase64(file);
+    } catch {
+      return "";
+    }
+  }
+}
+async function convertHeicToJpeg(blob, typeHint = "image/heic") {
   const { default: heic2any } = await import("heic2any");
-  const converted = await heic2any({ blob, toType: "image/jpeg", quality: 0.9 });
-  return Array.isArray(converted) ? converted[0] : converted;
+  const source = blob.type && blob.type !== "application/octet-stream" ? blob : new Blob([blob], { type: typeHint });
+  const converted = await heic2any({ blob: source, toType: "image/jpeg", quality: 0.9 });
+  const jpeg = Array.isArray(converted) ? converted[0] : converted;
+  return jpeg.type === "image/jpeg" ? jpeg : new Blob([jpeg], { type: "image/jpeg" });
 }
 function dataUrlToBlob(dataUrl) {
   const [meta, data] = dataUrl.split(",");
@@ -173,12 +200,13 @@ function dataUrlToBlob(dataUrl) {
 async function displayablePhotoUrl(photoUrl, fileName = "") {
   const isHeicData = photoUrl?.startsWith("data:image/heic") || photoUrl?.startsWith("data:image/heif");
   const isHeicName = fileName.toLowerCase().endsWith(".heic") || fileName.toLowerCase().endsWith(".heif");
+  if (isHeicName && photoUrl?.startsWith("data:image/jpeg")) return photoUrl;
   if (!photoUrl || (!isHeicData && !isHeicName)) return photoUrl;
   try {
-    const jpeg = await convertHeicToJpeg(dataUrlToBlob(photoUrl));
+    const jpeg = await convertHeicToJpeg(dataUrlToBlob(photoUrl), heicMimeHint(fileName));
     return fileToBase64(jpeg);
   } catch {
-    return photoUrl;
+    return "";
   }
 }
 
@@ -1079,11 +1107,13 @@ function SlippyMap({ pins, center, zoom, onPinClick, heatPoints = [], onMapClick
   };
   const handlePointerUp = () => { dragging.current = false; setIsDragging(false); };
   const handleContainerClick = (e) => {
-    if (dragMoved.current || !onMapClick) return;
+    if (dragMoved.current || !onMapClick || !containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
-    const px = e.clientX - rect.left, py = e.clientY - rect.top;
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
     const c2 = degToNum(mapState.center.lat, mapState.center.lon, mapState.zoom);
-    const tlX = c2.x * tileSize - size.w / 2, tlY = c2.y * tileSize - size.h / 2;
+    const tlX = c2.x * tileSize - size.w / 2;
+    const tlY = c2.y * tileSize - size.h / 2;
     onMapClick(numToDeg((tlX + px) / tileSize, (tlY + py) / tileSize, mapState.zoom));
   };
   const handleWheel = (e) => { e.preventDefault(); setMapState((p) => ({ ...p, zoom: Math.max(1, Math.min(18, p.zoom + (e.deltaY > 0 ? -1 : 1))) })); };
@@ -1205,13 +1235,13 @@ export default function App() {
   const [allLocations, setAllLocations] = useState([]);
   const [showHeatmap, setShowHeatmap] = useState(false);
   const [processing, setProcessing] = useState(false);
+  const [pendingPhotos, setPendingPhotos] = useState([]);
   const [dragOver, setDragOver] = useState(false);
   const [center, setCenter] = useState({ lat: 1.35, lon: 103.82 });
   const [zoom, setZoom] = useState(3);
   const [selectedPin, setSelectedPin] = useState(null);
   const [loading, setLoading] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
-  const [pendingPhotos, setPendingPhotos] = useState([]); // [{file, thumb, fileName}]
   const [showTimeline, setShowTimeline] = useState(false); // mobile sidebar toggle
   const isMobile = useIsMobile();
   const fileInputRef = useRef(null);
@@ -1262,11 +1292,16 @@ export default function App() {
     if (!user || needsUsername) return;
     async function loadPins() {
       setLoading(true);
-      const [{ data }, { data: publicRows }] = await Promise.all([
+      const [{ data }, globalHeatmapResult] = await Promise.all([
         supabase.from("locations").select("*").eq("user_id", user.id).order("created_at", { ascending: true }),
-        supabase.from("locations").select("id, lat, lon, place").order("created_at", { ascending: false }),
+        supabase.rpc("global_heatmap_locations"),
       ]);
-      setAllLocations(publicRows || []);
+      if (globalHeatmapResult.error) {
+        const { data: fallbackRows } = await supabase.from("locations").select("id, lat, lon, place").order("created_at", { ascending: false });
+        setAllLocations(fallbackRows || []);
+      } else {
+        setAllLocations(globalHeatmapResult.data || []);
+      }
       if (data && data.length > 0) {
         const loaded = await Promise.all(data.map(async (r) => ({ id: r.id, lat: r.lat, lon: r.lon, place: r.place || "Unknown", city: r.city || "", country: r.country || "", date: r.date || null, thumb: await displayablePhotoUrl(r.photo_url || null, r.file_name || ""), fileName: r.file_name || "" })));
         setPins(loaded); fitMapToPins(loaded);
@@ -1287,41 +1322,60 @@ export default function App() {
     }
   }
 
-  const savePhotoAt = useCallback(async (file, lat, lon, thumb) => {
+  const savePhotoAt = useCallback(async (file, lat, lon, thumb, date = null) => {
     const geo = await reverseGeocode(lat, lon);
-    const b64 = thumb || await photoToDisplayDataUrl(file);
-    const { data, error } = await supabase.from("locations").insert({ lat, lon, place: geo.display || "Unknown", city: geo.city || "", country: geo.country || "", date: null, photo_url: b64, file_name: file.name, user_id: user.id }).select().single();
-    if (!error) {
-      const pin = { id: data.id, lat, lon, place: geo.display || "Unknown", city: geo.city, country: geo.country, date: null, thumb: b64, fileName: file.name };
-      setPins(prev => { const all = [...prev, pin]; fitMapToPins(all); return all; });
-      setAllLocations(prev => [{ id: data.id, lat, lon, place: geo.display || "Unknown" }, ...prev]);
+    const b64 = thumb || await safePhotoToDisplayDataUrl(file);
+    if (!b64) {
+      alert(isHeicLike(file)
+        ? `Could not convert ${file.name} from HEIC. Please try exporting it as JPG, or use the original photo file from your Photos app.`
+        : `Could not load ${file.name}. Please try exporting it as JPG or PNG.`);
+      return null;
     }
+    const { data, error } = await supabase.from("locations").insert({
+      lat,
+      lon,
+      place: geo.display || "Unknown",
+      city: geo.city || "",
+      country: geo.country || "",
+      date,
+      photo_url: b64,
+      file_name: file.name,
+      user_id: user.id,
+    }).select().single();
+    if (error) {
+      alert(error.message);
+      return null;
+    }
+    const pin = { id: data.id, lat, lon, place: geo.display || "Unknown", city: geo.city, country: geo.country, date, thumb: b64, fileName: file.name };
+    setPins(prev => {
+      const all = [...prev, pin];
+      fitMapToPins(all);
+      return all;
+    });
+    setAllLocations(prev => [{ id: data.id, lat, lon, place: geo.display || "Unknown" }, ...prev]);
+    return pin;
   }, [user]);
 
   const processFiles = useCallback(async (files) => {
     if (!user) return;
     setProcessing(true);
-    await new Promise(resolve => setTimeout(resolve, 30)); // flush so spinner renders
+    await new Promise(resolve => setTimeout(resolve, 30));
     try {
       const imgs = Array.from(files).filter(isPhotoFile);
-      const np = [], noGps = [];
+      const noGps = [];
       for (const file of imgs) {
-        const gps = await parseExifGPS(file);
-        if (gps?.lat && gps?.lon) {
-          const geo = await reverseGeocode(gps.lat, gps.lon);
-          const b64 = await photoToDisplayDataUrl(file);
-          const { data, error } = await supabase.from("locations").insert({ lat: gps.lat, lon: gps.lon, place: geo.display || "Unknown", city: geo.city || "", country: geo.country || "", date: gps.date || null, photo_url: b64, file_name: file.name, user_id: user.id }).select().single();
-          if (!error) {
-            np.push({ id: data.id, lat: gps.lat, lon: gps.lon, place: geo.display || "Unknown", city: geo.city, country: geo.country, date: gps.date || null, thumb: b64, fileName: file.name });
-            setAllLocations(prev => [{ id: data.id, lat: gps.lat, lon: gps.lon, place: geo.display || "Unknown" }, ...prev]);
+        try {
+          const gps = await parseExifGPS(file);
+          if (gps?.lat && gps?.lon) {
+            await savePhotoAt(file, gps.lat, gps.lon, null, gps.date || null);
+          } else {
+            noGps.push(file);
           }
-        } else {
+        } catch {
           noGps.push(file);
         }
       }
-      if (np.length > 0) setPins(prev => { const all = [...prev, ...np]; fitMapToPins(all); return all; });
       if (noGps.length > 0) {
-        // Try device geolocation for a suggested location
         const pos = await Promise.race([
           new Promise(resolve => {
             if (!navigator.geolocation) return resolve(null);
@@ -1334,11 +1388,15 @@ export default function App() {
           const geo = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
           suggestion = { lat: pos.coords.latitude, lon: pos.coords.longitude, place: geo.display };
         }
-        const queued = await Promise.all(noGps.map(async f => ({
-          file: f, thumb: await photoToDisplayDataUrl(f), fileName: f.name, suggestion,
-        })));
+        const queued = (await Promise.all(noGps.map(async file => {
+          const thumb = await safePhotoToDisplayDataUrl(file);
+          if (!thumb) return null;
+          return { file, thumb, fileName: file.name, suggestion };
+        }))).filter(Boolean);
         setPendingPhotos(prev => [...prev, ...queued]);
+        if (queued.length === 0) alert("Could not load the selected image. For HEIC photos, try exporting as JPG or uploading the original photo file.");
       }
+      if (imgs.length === 0) alert("No supported image files found.");
     } finally {
       setProcessing(false);
     }
@@ -1379,8 +1437,6 @@ export default function App() {
     setAllLocations(prev => prev.filter(location => location.id !== pin.id));
   };
 
-  const handleLogout = async () => { await supabase.auth.signOut(); setPins([]); setUser(null); setProfile(null); };
-
   const handleMapClick = useCallback(async (geo) => {
     if (pendingPhotos.length === 0) return;
     const [current, ...rest] = pendingPhotos;
@@ -1389,14 +1445,18 @@ export default function App() {
   }, [pendingPhotos, savePhotoAt]);
 
   const handleUseMyLocation = useCallback(async () => {
-    if (pendingPhotos.length === 0) return;
+    if (pendingPhotos.length === 0 || !navigator.geolocation) return;
     const pos = await new Promise(resolve => {
       navigator.geolocation.getCurrentPosition(p => resolve(p), () => resolve(null), { timeout: 8000 });
     });
-    if (!pos) return;
+    if (!pos) {
+      alert("Could not get your current location. Tap the map to place this photo.");
+      return;
+    }
     const geo = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
     setPendingPhotos(prev => {
       const [first, ...rest] = prev;
+      if (!first) return prev;
       return [{ ...first, suggestion: { lat: pos.coords.latitude, lon: pos.coords.longitude, place: geo.display } }, ...rest];
     });
   }, [pendingPhotos]);
@@ -1412,9 +1472,12 @@ export default function App() {
   const handleDismissSuggestion = useCallback(() => {
     setPendingPhotos(prev => {
       const [first, ...rest] = prev;
+      if (!first) return prev;
       return [{ ...first, suggestion: null }, ...rest];
     });
   }, []);
+
+  const handleLogout = async () => { await supabase.auth.signOut(); setPins([]); setUser(null); setProfile(null); };
 
   const sortedPins = [...pins].sort((a, b) => { if (!a.date && !b.date) return 0; if (!a.date) return 1; if (!b.date) return -1; return a.date.localeCompare(b.date); });
 
@@ -1504,6 +1567,7 @@ export default function App() {
                 <button onClick={() => { setShowTutorial(true); setShowUserMenu(false); }} style={menuItemStyle}>
                   <span>?</span> Tutorial
                 </button>
+                <div style={{ padding: "10px 16px", color: palette.muted, fontSize: 11 }}>Version {APP_VERSION}</div>
                 <div style={{ height: 1, background: "rgba(255,255,255,0.06)" }} />
                 <button onClick={() => { handleLogout(); setShowUserMenu(false); }} style={{ ...menuItemStyle, color: palette.accent }}>
                   <span>↩</span> Log Out
@@ -1617,7 +1681,15 @@ export default function App() {
         </div>
 
         <div style={{ flex: 1, position: "relative" }} onDragOver={(e) => { e.preventDefault(); setDragOver(true); }} onDragLeave={() => setDragOver(false)} onDrop={(e) => { e.preventDefault(); setDragOver(false); processFiles(e.dataTransfer.files); }}>
-          <SlippyMap pins={pins} heatPoints={showHeatmap ? publicHeatPoints : []} center={center} zoom={zoom} onPinClick={(p) => setLightboxPin(p)} onMapClick={pendingPhotos.length > 0 ? handleMapClick : undefined} placementMode={pendingPhotos.length > 0} />
+          <SlippyMap
+            pins={pins}
+            heatPoints={showHeatmap ? publicHeatPoints : []}
+            center={center}
+            zoom={zoom}
+            onPinClick={(p) => setLightboxPin(p)}
+            onMapClick={pendingPhotos.length > 0 ? handleMapClick : undefined}
+            placementMode={pendingPhotos.length > 0}
+          />
 
           {loading && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 25, background: "rgba(10,10,15,0.8)" }}>
             <div style={{ textAlign: "center" }}><div style={{ width: 32, height: 32, border: "3px solid rgba(230,57,70,0.3)", borderTop: "3px solid #E63946", borderRadius: "50%", animation: "spin 0.8s linear infinite", margin: "0 auto 16px" }} /><div style={{ fontSize: 16, opacity: 0.7 }}>Loading your travels...</div></div>
@@ -1638,13 +1710,13 @@ export default function App() {
           <div style={{ position: "absolute", top: 16, left: 16, zIndex: 30, display: "flex", gap: 10, flexWrap: "wrap" }}>
             {!isMobile && <button onClick={() => fileInputRef.current?.click()} style={{ background: `linear-gradient(135deg, ${palette.accent}, ${palette.accentDark})`, color: "white", border: "none", padding: "10px 18px", borderRadius: 14, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", boxShadow: "0 12px 28px rgba(255,107,74,0.25)", display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontSize: 18 }}>+</span> Add Photos</button>}
             <button onClick={togglePopularPlaces} style={{ ...secondaryBtnStyle, padding: "10px 14px", background: showHeatmap ? "rgba(66,217,184,0.22)" : "rgba(17,24,39,0.78)", border: showHeatmap ? `1px solid ${palette.mint}` : `1px solid ${palette.line}`, boxShadow: "0 12px 28px rgba(0,0,0,0.18)" }}>
-              {isMobile ? "🔥" : "Popular Places"}
+              {isMobile ? "Global" : "Global Popular Places"}
             </button>
             {isMobile && pins.length > 0 && <button onClick={() => setShowTimeline(t => !t)} style={{ ...secondaryBtnStyle, padding: "10px 14px", background: "rgba(17,24,39,0.78)", boxShadow: "0 12px 28px rgba(0,0,0,0.18)" }}>☰</button>}
           </div>
 
           {showHeatmap && <div style={{ position: "absolute", left: 16, bottom: 16, zIndex: 30, background: "rgba(17,24,39,0.82)", border: `1px solid ${palette.line}`, borderRadius: 12, padding: "9px 12px", color: palette.text, fontSize: 12, boxShadow: "0 12px 30px rgba(0,0,0,0.2)" }}>
-            Showing {publicHeatPoints.length} popular place groups
+            Showing {publicHeatPoints.length} global place groups
           </div>}
 
           {dragOver && <div style={{ position: "absolute", inset: 0, zIndex: 40, background: "rgba(230,57,70,0.15)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", border: "3px dashed #E63946", borderRadius: 16, margin: 8 }}><div style={{ fontSize: 22, fontWeight: 700, color: "#E63946" }}>Drop photos here</div></div>}

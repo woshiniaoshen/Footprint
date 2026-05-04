@@ -7,6 +7,30 @@ add column if not exists email text;
 create index if not exists profiles_role_idx on public.profiles(role);
 create index if not exists profiles_email_idx on public.profiles(email);
 
+create or replace function public.global_heatmap_locations()
+returns table (
+  id bigint,
+  lat double precision,
+  lon double precision,
+  place text
+)
+language sql
+security definer
+set search_path = public
+as $$
+  select
+    locations.id,
+    locations.lat,
+    locations.lon,
+    locations.place
+  from public.locations
+  where locations.lat is not null
+    and locations.lon is not null
+  order by locations.created_at desc;
+$$;
+
+grant execute on function public.global_heatmap_locations() to authenticated;
+
 drop function if exists public.admin_user_accounts();
 
 create or replace function public.admin_user_accounts()
