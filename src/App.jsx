@@ -24,6 +24,70 @@ const palette = {
 };
 
 // ─── Geo Helpers ───
+function svgDataUrl(svg) {
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+const DEFAULT_AVATARS = [
+  { name: "Summit", image: svgDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="64" fill="#182235"/><circle cx="96" cy="30" r="14" fill="#F2C36B"/><path d="M14 92 45 48l22 30 16-20 31 34v22H14z" fill="#42D9B8"/><path d="M45 48 57 65l-16-5zm38 10 13 15-18-6z" fill="#F7F3EA"/></svg>`) },
+  { name: "Coast", image: svgDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="64" fill="#16324A"/><circle cx="90" cy="36" r="18" fill="#FF6B4A"/><path d="M0 84c18-10 34-10 50 0s32 10 50 0c12-7 21-8 28-6v50H0z" fill="#5DADEC"/><path d="M0 100c18-8 34-8 50 0s32 8 50 0c12-5 21-6 28-4v32H0z" fill="#42D9B8"/></svg>`) },
+  { name: "Trail", image: svgDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="64" fill="#1D2B22"/><path d="M24 100c18-28 38-29 55-43 9-8 15-17 20-29" stroke="#F7F3EA" stroke-width="10" stroke-linecap="round" fill="none"/><path d="M40 28c0 17-18 34-18 34S4 45 4 28a18 18 0 1 1 36 0z" fill="#FF6B4A" transform="translate(42 4)"/><circle cx="64" cy="32" r="7" fill="#F7F3EA"/><circle cx="33" cy="95" r="8" fill="#42D9B8"/></svg>`) },
+  { name: "City", image: svgDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="64" fill="#111827"/><rect x="25" y="52" width="18" height="48" rx="4" fill="#5DADEC"/><rect x="50" y="32" width="24" height="68" rx="4" fill="#F7F3EA"/><rect x="82" y="44" width="20" height="56" rx="4" fill="#42D9B8"/><path d="M18 104h92" stroke="#FF6B4A" stroke-width="8" stroke-linecap="round"/><circle cx="87" cy="25" r="10" fill="#F2C36B"/></svg>`) },
+  { name: "Compass", image: svgDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="64" fill="#241B2F"/><circle cx="64" cy="64" r="42" fill="#F7F3EA"/><circle cx="64" cy="64" r="34" fill="#17243A"/><path d="m74 27-6 41-31 33 23-43z" fill="#FF6B4A"/><path d="m54 101 6-41 31-33-23 43z" fill="#42D9B8"/><circle cx="64" cy="64" r="7" fill="#F2C36B"/></svg>`) },
+  { name: "Passport", image: svgDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="64" fill="#17313B"/><rect x="36" y="24" width="56" height="80" rx="9" fill="#FF6B4A"/><path d="M48 44h32M48 88h24" stroke="#F7F3EA" stroke-width="6" stroke-linecap="round"/><circle cx="64" cy="65" r="15" fill="#42D9B8"/><path d="M49 65h30M64 50c7 8 7 22 0 30M64 50c-7 8-7 22 0 30" stroke="#17313B" stroke-width="3" fill="none"/></svg>`) },
+];
+
+const USERNAME_ADJECTIVES = ["sunny", "brave", "hidden", "golden", "wild", "cozy", "urban", "quiet", "bright", "lucky"];
+const USERNAME_NOUNS = ["trail", "passport", "summit", "harbor", "compass", "journey", "skyline", "nomad", "map", "roamer"];
+
+function randomUsernameCandidate() {
+  const adjective = USERNAME_ADJECTIVES[Math.floor(Math.random() * USERNAME_ADJECTIVES.length)];
+  const noun = USERNAME_NOUNS[Math.floor(Math.random() * USERNAME_NOUNS.length)];
+  return `${adjective}_${noun}${Math.floor(10 + Math.random() * 90)}`;
+}
+
+const PASSWORD_HELP = "Use at least 8 characters with uppercase, lowercase, number, and symbol.";
+
+function passwordComplexityError(password) {
+  if (password.length < 8) return PASSWORD_HELP;
+  if (!/[A-Z]/.test(password)) return PASSWORD_HELP;
+  if (!/[a-z]/.test(password)) return PASSWORD_HELP;
+  if (!/[0-9]/.test(password)) return PASSWORD_HELP;
+  if (!/[^A-Za-z0-9]/.test(password)) return PASSWORD_HELP;
+  return "";
+}
+
+function heatmapCenter(points) {
+  if (!points.length) return { center: { lat: 1.35, lon: 103.82 }, zoom: 2 };
+  const lats = points.map(point => point.lat);
+  const lons = points.map(point => point.lon);
+  const spread = Math.max(Math.max(...lats) - Math.min(...lats), Math.max(...lons) - Math.min(...lons));
+  return {
+    center: { lat: (Math.min(...lats) + Math.max(...lats)) / 2, lon: (Math.min(...lons) + Math.max(...lons)) / 2 },
+    zoom: spread > 100 ? 2 : spread > 50 ? 3 : spread > 20 ? 4 : spread > 5 ? 5 : spread > 1 ? 7 : 10,
+  };
+}
+
+function groupHeatPoints(rows) {
+  const grouped = new Map();
+  for (const row of rows) {
+    if (!Number.isFinite(row.lat) || !Number.isFinite(row.lon)) continue;
+    const key = `${row.lat.toFixed(1)},${row.lon.toFixed(1)}`;
+    const current = grouped.get(key) || { lat: 0, lon: 0, count: 0, place: row.place || "Popular place" };
+    grouped.set(key, {
+      lat: current.lat + row.lat,
+      lon: current.lon + row.lon,
+      count: current.count + 1,
+      place: current.place || row.place || "Popular place",
+    });
+  }
+  return [...grouped.values()].map(point => ({
+    ...point,
+    lat: point.lat / point.count,
+    lon: point.lon / point.count,
+  })).sort((a, b) => b.count - a.count);
+}
+
 function degToNum(lat, lon, zoom) {
   const n = Math.pow(2, zoom);
   return { x: ((lon + 180) / 360) * n, y: ((1 - Math.log(Math.tan((lat * Math.PI) / 180) + 1 / Math.cos((lat * Math.PI) / 180)) / Math.PI) / 2) * n };
@@ -341,6 +405,10 @@ function AdminPanel({ currentUser, onClose }) {
     for (const upload of uploads) counts.set(upload.user_id, (counts.get(upload.user_id) || 0) + 1);
     return counts;
   }, [uploads]);
+  const heatPoints = useMemo(() => {
+    return groupHeatPoints(uploads);
+  }, [uploads]);
+  const heatView = useMemo(() => heatmapCenter(heatPoints), [heatPoints]);
   const effectiveUserId = userId || selectedUserId;
   const selectedUser = profiles.find(person => person.id === effectiveUserId);
   const selectedEmail = selectedUser ? userEmail(selectedUser) : "";
@@ -407,7 +475,10 @@ function AdminPanel({ currentUser, onClose }) {
     setMessage("");
     if (!userId) { setMessage("Choose a user first"); return; }
     if (!newEmail && !newPassword) { setMessage("Enter a new email or new password"); return; }
-    if (newPassword && newPassword.length < 6) { setMessage("Password must be at least 6 characters"); return; }
+    if (newPassword) {
+      const passwordError = passwordComplexityError(newPassword);
+      if (passwordError) { setMessage(passwordError); return; }
+    }
     const changes = [newEmail ? `email to ${newEmail}` : "", newPassword ? "password" : ""].filter(Boolean).join(" and ");
     const ok = window.confirm(`Update this user's ${changes}?`);
     if (!ok) return;
@@ -451,6 +522,16 @@ function AdminPanel({ currentUser, onClose }) {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14, marginBottom: 20 }}>
             <div style={adminStatStyle}><strong>{profiles.length}</strong><span>Users</span></div>
             <div style={adminStatStyle}><strong>{uploads.length}</strong><span>Total uploads</span></div>
+          </div>
+
+          <div style={{ padding: 18, borderRadius: 18, background: "rgba(255,255,255,0.06)", border: `1px solid ${palette.line}`, marginBottom: 22 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
+              <h3 style={{ margin: 0, fontSize: 14 }}>Popular Places Heatmap</h3>
+              <div style={{ color: palette.muted, fontSize: 12 }}>{heatPoints.length} place groups</div>
+            </div>
+            <div style={{ height: 280, borderRadius: 14, overflow: "hidden", border: `1px solid ${palette.line}` }}>
+              <SlippyMap pins={[]} heatPoints={heatPoints} center={heatView.center} zoom={heatView.zoom} />
+            </div>
           </div>
 
           <div style={{ padding: 18, borderRadius: 18, background: "rgba(255,255,255,0.06)", border: `1px solid ${palette.line}`, marginBottom: 22 }}>
@@ -580,7 +661,10 @@ function AuthScreen({ onAuth }) {
   const handleSubmit = async () => {
     setError(""); setLoading(true);
     if (!email || !password) { setError("Please fill in both fields"); setLoading(false); return; }
-    if (password.length < 6) { setError("Password must be at least 6 characters"); setLoading(false); return; }
+    if (!isLogin) {
+      const passwordError = passwordComplexityError(password);
+      if (passwordError) { setError(passwordError); setLoading(false); return; }
+    }
     try {
       if (isLogin) {
         const { data, error: e } = await supabase.auth.signInWithPassword({ email, password });
@@ -646,6 +730,22 @@ function AuthScreen({ onAuth }) {
   return (
     <div style={authContainerStyle}>
       <Fonts />
+      <div style={{ width: "min(980px, calc(100vw - 32px))", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(320px, 100%), 1fr))", gap: 24, alignItems: "stretch", position: "relative", zIndex: 10 }}>
+      <div style={{ ...authCardStyle, width: "100%", maxWidth: "none", display: "flex", flexDirection: "column", justifyContent: "center" }}>
+        <BrandLockup align="left" titleSize={38} />
+        <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 34, lineHeight: 1.05, margin: "28px 0 12px" }}>Turn your photos into a travel map</h2>
+        <p style={{ color: palette.muted, fontSize: 15, lineHeight: 1.7, margin: 0 }}>
+          Footprint reads GPS data from your photos, places them on a map, and builds a visual timeline of where you have been. You can upload JPG, PNG, HEIC, explore popular places, and revisit each memory by clicking its photo.
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginTop: 24 }}>
+          {["Upload", "Map", "Remember"].map((label, index) => (
+            <div key={label} style={{ padding: 12, borderRadius: 14, background: "rgba(255,255,255,0.07)", border: `1px solid ${palette.line}` }}>
+              <div style={{ color: [palette.mint, palette.gold, palette.sky][index], fontWeight: 800, fontSize: 20 }}>{index + 1}</div>
+              <div style={{ marginTop: 4, fontSize: 12, fontWeight: 700 }}>{label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
       <div style={authCardStyle}>
         <div style={{ textAlign: "center", marginBottom: 32 }}>
           <BrandLockup />
@@ -655,6 +755,7 @@ function AuthScreen({ onAuth }) {
           <input type="email" placeholder="Email address" value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSubmit()} style={inputStyle} />
           <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSubmit()} style={inputStyle} />
         </div>
+        {!isLogin && <div style={{ marginTop: 8, color: palette.muted, fontSize: 12, lineHeight: 1.4 }}>{PASSWORD_HELP}</div>}
         {error && <div style={{ background: "rgba(230,57,70,0.1)", border: "1px solid rgba(230,57,70,0.3)", color: "#E63946", padding: "10px 14px", borderRadius: 10, fontSize: 13, marginTop: 12 }}>{error}</div>}
         <button onClick={handleSubmit} disabled={loading} style={{ ...authBtnStyle, marginTop: 16, opacity: loading ? 0.6 : 1 }}>
           {loading ? "Please wait..." : isLogin ? "Log In" : "Sign Up"}
@@ -666,6 +767,7 @@ function AuthScreen({ onAuth }) {
           </button>
         </div>
         {isLogin && <button onClick={() => { setForgotMode(true); setError(""); }} style={{ width: "100%", marginTop: 14, background: "none", border: "none", color: palette.mint, cursor: "pointer", fontSize: 13, fontWeight: 700, fontFamily: "'DM Sans', sans-serif" }}>Forgot password?</button>}
+      </div>
       </div>
     </div>
   );
@@ -680,7 +782,8 @@ function PasswordResetScreen({ onComplete }) {
 
   const handlePasswordReset = async () => {
     setError("");
-    if (password.length < 6) { setError("Password must be at least 6 characters"); return; }
+    const passwordError = passwordComplexityError(password);
+    if (passwordError) { setError(passwordError); return; }
     if (password !== confirmPassword) { setError("Passwords do not match"); return; }
     setLoading(true);
     const { error: e } = await supabase.auth.updateUser({ password });
@@ -699,6 +802,7 @@ function PasswordResetScreen({ onComplete }) {
           <input type="password" placeholder="New password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handlePasswordReset()} style={inputStyle} />
           <input type="password" placeholder="Confirm password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handlePasswordReset()} style={inputStyle} />
         </div>
+        <div style={{ marginTop: 8, color: palette.muted, fontSize: 12, lineHeight: 1.4 }}>{PASSWORD_HELP}</div>
         {error && <div style={{ background: "rgba(230,57,70,0.1)", border: "1px solid rgba(230,57,70,0.3)", color: "#E63946", padding: "10px 14px", borderRadius: 10, fontSize: 13, marginTop: 12 }}>{error}</div>}
         <button onClick={handlePasswordReset} disabled={loading} style={{ ...authBtnStyle, marginTop: 16, opacity: loading ? 0.6 : 1 }}>{loading ? "Updating..." : "Update Password"}</button>
       </div>
@@ -712,6 +816,7 @@ function UsernameSetup({ user, onComplete }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [generatingName, setGeneratingName] = useState(false);
   const fileRef = useRef(null);
 
   const checkUsername = async (name) => {
@@ -738,6 +843,22 @@ function UsernameSetup({ user, onComplete }) {
     if (!file) return;
     const b64 = await fileToBase64(file);
     setAvatar(b64);
+  };
+
+  const generateUsername = async () => {
+    setGeneratingName(true);
+    setError("");
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const candidate = randomUsernameCandidate();
+      const { data } = await supabase.from("profiles").select("id").eq("username", candidate).limit(1);
+      if (!data?.length) {
+        setUsername(candidate);
+        setGeneratingName(false);
+        return;
+      }
+    }
+    setUsername(randomUsernameCandidate());
+    setGeneratingName(false);
   };
 
   const handleSubmit = async () => {
@@ -785,8 +906,17 @@ function UsernameSetup({ user, onComplete }) {
           <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleAvatarSelect} />
         </div>
 
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8, marginBottom: 22 }}>
+          {DEFAULT_AVATARS.map((preset) => (
+            <button key={preset.name} type="button" title={preset.name} onClick={() => setAvatar(preset.image)} style={{
+              width: "100%", aspectRatio: "1", borderRadius: "50%", border: avatar === preset.image ? `2px solid ${palette.mint}` : `1px solid ${palette.line}`,
+              background: `url(${preset.image}) center/cover`, cursor: "pointer", boxShadow: avatar === preset.image ? "0 0 0 3px rgba(66,217,184,0.14)" : "none",
+            }} />
+          ))}
+        </div>
+
         {/* Username input */}
-        <div style={{ position: "relative" }}>
+        <div style={{ position: "relative", display: "grid", gridTemplateColumns: "1fr auto", gap: 10 }}>
           <div style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", opacity: 0.4, fontSize: 14 }}>@</div>
           <input
             type="text" placeholder="username" value={username}
@@ -795,6 +925,9 @@ function UsernameSetup({ user, onComplete }) {
             style={{ ...inputStyle, paddingLeft: 32 }}
             maxLength={20}
           />
+          <button type="button" onClick={generateUsername} disabled={generatingName} style={{ ...secondaryBtnStyle, padding: "0 14px", whiteSpace: "nowrap", opacity: generatingName ? 0.55 : 1 }}>
+            {generatingName ? "..." : "Generate"}
+          </button>
         </div>
         {username.length > 0 && username.length < 3 && <div style={{ fontSize: 12, opacity: 0.4, marginTop: 6 }}>At least 3 characters</div>}
         {checking && <div style={{ fontSize: 12, opacity: 0.4, marginTop: 6 }}>Checking availability...</div>}
@@ -826,6 +959,7 @@ function EditProfile({ profile, onSave, onClose }) {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [passwordMessage, setPasswordMessage] = useState("");
   const [passwordLoading, setPasswordLoading] = useState(false);
+  const [generatingName, setGeneratingName] = useState(false);
   const fileRef = useRef(null);
   const origUsername = profile.username;
 
@@ -855,6 +989,22 @@ function EditProfile({ profile, onSave, onClose }) {
     setAvatar(b64);
   };
 
+  const generateUsername = async () => {
+    setGeneratingName(true);
+    setError("");
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const candidate = randomUsernameCandidate();
+      const { data } = await supabase.from("profiles").select("id").eq("username", candidate).limit(1);
+      if (!data?.length) {
+        setUsername(candidate);
+        setGeneratingName(false);
+        return;
+      }
+    }
+    setUsername(randomUsernameCandidate());
+    setGeneratingName(false);
+  };
+
   const handleSave = async () => {
     if (username.length < 3) { setError("Username must be at least 3 characters"); return; }
     if (error) return;
@@ -873,7 +1023,8 @@ function EditProfile({ profile, onSave, onClose }) {
 
   const handleChangePassword = async () => {
     setPasswordMessage("");
-    if (newPassword.length < 6) { setPasswordMessage("Password must be at least 6 characters"); return; }
+    const passwordError = passwordComplexityError(newPassword);
+    if (passwordError) { setPasswordMessage(passwordError); return; }
     if (newPassword !== confirmPassword) { setPasswordMessage("Passwords do not match"); return; }
     setPasswordLoading(true);
     const { error: e } = await supabase.auth.updateUser({ password: newPassword });
@@ -918,9 +1069,21 @@ function EditProfile({ profile, onSave, onClose }) {
           <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleAvatarSelect} />
         </div>
 
-        <div style={{ position: "relative" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8, marginBottom: 22 }}>
+          {DEFAULT_AVATARS.map((preset) => (
+            <button key={preset.name} type="button" title={preset.name} onClick={() => setAvatar(preset.image)} style={{
+              width: "100%", aspectRatio: "1", borderRadius: "50%", border: avatar === preset.image ? `2px solid ${palette.mint}` : `1px solid ${palette.line}`,
+              background: `url(${preset.image}) center/cover`, cursor: "pointer", boxShadow: avatar === preset.image ? "0 0 0 3px rgba(66,217,184,0.14)" : "none",
+            }} />
+          ))}
+        </div>
+
+        <div style={{ position: "relative", display: "grid", gridTemplateColumns: "1fr auto", gap: 10 }}>
           <div style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", opacity: 0.4, fontSize: 14 }}>@</div>
           <input type="text" value={username} onChange={handleUsernameChange} style={{ ...inputStyle, paddingLeft: 32 }} maxLength={20} />
+          <button type="button" onClick={generateUsername} disabled={generatingName} style={{ ...secondaryBtnStyle, padding: "0 14px", whiteSpace: "nowrap", opacity: generatingName ? 0.55 : 1 }}>
+            {generatingName ? "..." : "Generate"}
+          </button>
         </div>
         {checking && <div style={{ fontSize: 12, opacity: 0.4, marginTop: 6 }}>Checking availability...</div>}
         {error && <div style={{ background: "rgba(230,57,70,0.1)", border: "1px solid rgba(230,57,70,0.3)", color: "#E63946", padding: "10px 14px", borderRadius: 10, fontSize: 13, marginTop: 12 }}>{error}</div>}
@@ -932,6 +1095,7 @@ function EditProfile({ profile, onSave, onClose }) {
           <input type="password" placeholder="New password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} style={inputStyle} />
           <input type="password" placeholder="Confirm new password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} style={inputStyle} />
         </div>
+        <div style={{ marginTop: 8, color: palette.muted, fontSize: 12, lineHeight: 1.4 }}>{PASSWORD_HELP}</div>
         {passwordMessage && <div style={{ color: passwordMessage === "Password updated" ? "#4ade80" : "#E63946", fontSize: 12, marginTop: 8 }}>{passwordMessage}</div>}
         <button onClick={handleChangePassword} disabled={passwordLoading || !newPassword || !confirmPassword} style={{
           ...secondaryBtnStyle, width: "100%", marginTop: 12,
@@ -956,7 +1120,7 @@ function EditProfile({ profile, onSave, onClose }) {
 }
 
 // ─── Map Component ───
-function SlippyMap({ pins, center, zoom, onPinClick }) {
+function SlippyMap({ pins, center, zoom, onPinClick, heatPoints = [] }) {
   const containerRef = useRef(null);
   const dragging = useRef(false);
   const dragMoved = useRef(false);
@@ -987,6 +1151,11 @@ function SlippyMap({ pins, center, zoom, onPinClick }) {
     tiles.push({ key: `${z}-${tx}-${ty}-${dx}-${dy}`, url: TILE_URL.replace("{z}", z).replace("{x}", tx).replace("{y}", ty), left: oX + dx * tileSize, top: oY + dy * tileSize });
   }
   const pinPos = pins.map((p) => { const pp = degToNum(p.lat, p.lon, z); return { ...p, x: pp.x * tileSize - tlPX, y: pp.y * tileSize - tlPY }; });
+  const maxHeat = Math.max(1, ...heatPoints.map(point => point.count || 1));
+  const heatPos = heatPoints.map((p) => {
+    const pp = degToNum(p.lat, p.lon, z);
+    return { ...p, x: pp.x * tileSize - tlPX, y: pp.y * tileSize - tlPY, strength: (p.count || 1) / maxHeat };
+  });
 
   const handlePointerDown = (e) => { dragging.current = true; setIsDragging(true); dragMoved.current = false; lastPos.current = { x: e.clientX, y: e.clientY }; e.currentTarget.setPointerCapture(e.pointerId); };
   const handlePointerMove = (e) => {
@@ -1003,6 +1172,21 @@ function SlippyMap({ pins, center, zoom, onPinClick }) {
     <div ref={containerRef} style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden", cursor: isDragging ? "grabbing" : "grab", touchAction: "none", borderRadius: "16px" }}
       onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onWheel={handleWheel}>
       {tiles.map((t) => <img key={t.key} src={t.url} alt="" style={{ position: "absolute", left: t.left, top: t.top, width: tileSize, height: tileSize, pointerEvents: "none" }} draggable={false} />)}
+      {heatPos.map((point, i) => (
+        <div key={`${point.lat}-${point.lon}-${i}`} title={`${point.place}: ${point.count} uploads`} style={{
+          position: "absolute",
+          left: point.x,
+          top: point.y,
+          width: 50 + point.strength * 82,
+          height: 50 + point.strength * 82,
+          transform: "translate(-50%, -50%)",
+          borderRadius: "50%",
+          background: `radial-gradient(circle, rgba(255,107,74,${0.52 + point.strength * 0.24}) 0%, rgba(242,195,107,${0.24 + point.strength * 0.18}) 42%, rgba(66,217,184,0) 72%)`,
+          mixBlendMode: "multiply",
+          pointerEvents: "none",
+          zIndex: 5,
+        }} />
+      ))}
       {pinPos.map((p, i) => (
         <div key={p.id || i} style={{ position: "absolute", left: p.x, top: p.y, transform: "translate(-50%, -100%)", zIndex: hoveredPin === i ? 20 : 10 }}
           onPointerEnter={() => setHoveredPin(i)} onPointerLeave={() => setHoveredPin(null)}
@@ -1032,6 +1216,45 @@ function SlippyMap({ pins, center, zoom, onPinClick }) {
   );
 }
 
+function TutorialModal({ onClose }) {
+  const steps = [
+    { title: "Add travel photos", body: "Upload photos from your trips. Footprint reads GPS metadata and places each photo where it was taken." },
+    { title: "Explore your map", body: "Click map pins or timeline photos to view memories bigger, then delete individual uploads when you need to clean up." },
+    { title: "Find popular places", body: "Use Popular Places to see heatmap areas from everyone’s uploaded locations." },
+    { title: "Make it yours", body: "Open Edit Profile to change your avatar, generate a username, or update your password." },
+  ];
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, zIndex: 1200, background: "rgba(6,10,18,0.78)",
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
+      backdropFilter: "blur(12px)",
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        width: "min(720px, calc(100vw - 32px))", borderRadius: 24,
+        background: "linear-gradient(180deg, rgba(255,255,255,0.13), rgba(255,255,255,0.06))",
+        border: `1px solid ${palette.line}`, boxShadow: "0 28px 90px rgba(0,0,0,0.46)",
+        padding: 28, color: palette.text,
+      }}>
+        <BrandLockup align="left" titleSize={28} compact />
+        <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 30, margin: "24px 0 8px" }}>How Footprint works</h2>
+        <p style={{ color: palette.muted, fontSize: 14, lineHeight: 1.7, margin: "0 0 22px" }}>
+          Build a private-feeling travel map from your own photos, then compare it with popular places other users have visited.
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+          {steps.map((step, index) => (
+            <div key={step.title} style={{ padding: 16, borderRadius: 16, background: "rgba(255,255,255,0.07)", border: `1px solid ${palette.line}` }}>
+              <div style={{ width: 30, height: 30, borderRadius: "50%", background: [palette.mint, palette.gold, palette.sky, palette.accent][index], color: palette.ink, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 900, marginBottom: 12 }}>{index + 1}</div>
+              <div style={{ fontWeight: 800, marginBottom: 6 }}>{step.title}</div>
+              <div style={{ color: palette.muted, fontSize: 13, lineHeight: 1.55 }}>{step.body}</div>
+            </div>
+          ))}
+        </div>
+        <button onClick={onClose} style={{ ...authBtnStyle, marginTop: 22 }}>Start Mapping</button>
+      </div>
+    </div>
+  );
+}
+
 const zoomBtnStyle = { width: 36, height: 36, border: "none", borderRadius: 10, background: "rgba(255,255,255,0.94)", cursor: "pointer", fontSize: 20, fontWeight: 700, color: palette.ink, boxShadow: "0 2px 10px rgba(17,24,39,0.18)", display: "flex", alignItems: "center", justifyContent: "center" };
 
 // ─── Styles ───
@@ -1056,8 +1279,11 @@ export default function App() {
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [showProfilePreview, setShowProfilePreview] = useState(false);
+  const [showTutorial, setShowTutorial] = useState(false);
   const [lightboxPin, setLightboxPin] = useState(null);
   const [pins, setPins] = useState([]);
+  const [allLocations, setAllLocations] = useState([]);
+  const [showHeatmap, setShowHeatmap] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [center, setCenter] = useState({ lat: 1.35, lon: 103.82 });
@@ -1071,7 +1297,17 @@ export default function App() {
     countries: new Set(pins.map(p => p.country).filter(Boolean)).size,
     cities: new Set(pins.map(p => p.city).filter(Boolean)).size,
   }), [pins]);
+  const publicHeatPoints = useMemo(() => groupHeatPoints(allLocations), [allLocations]);
+  const publicHeatView = useMemo(() => heatmapCenter(publicHeatPoints), [publicHeatPoints]);
   const isAdmin = profile?.role === "admin" || ADMIN_EMAILS.includes(user?.email?.toLowerCase() || "");
+
+  useEffect(() => {
+    if (!user || needsUsername) return;
+    if (localStorage.getItem("footprint_tutorial_seen") === "yes") return;
+    localStorage.setItem("footprint_tutorial_seen", "yes");
+    const id = window.setTimeout(() => setShowTutorial(true), 0);
+    return () => window.clearTimeout(id);
+  }, [user, needsUsername]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -1088,7 +1324,7 @@ export default function App() {
   // Load profile when user logs in
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (!user) { setProfile(null); setNeedsUsername(false); setPins([]); return; }
+    if (!user) { setProfile(null); setNeedsUsername(false); setPins([]); setAllLocations([]); return; }
     async function loadProfile() {
       const { data, error } = await supabase.from("profiles").select("*").eq("id", user.id).single();
       if (error || !data) { setNeedsUsername(true); return; }
@@ -1103,7 +1339,11 @@ export default function App() {
     if (!user || needsUsername) return;
     async function loadPins() {
       setLoading(true);
-      const { data } = await supabase.from("locations").select("*").eq("user_id", user.id).order("created_at", { ascending: true });
+      const [{ data }, { data: publicRows }] = await Promise.all([
+        supabase.from("locations").select("*").eq("user_id", user.id).order("created_at", { ascending: true }),
+        supabase.from("locations").select("id, lat, lon, place").order("created_at", { ascending: false }),
+      ]);
+      setAllLocations(publicRows || []);
       if (data && data.length > 0) {
         const loaded = await Promise.all(data.map(async (r) => ({ id: r.id, lat: r.lat, lon: r.lon, place: r.place || "Unknown", city: r.city || "", country: r.country || "", date: r.date || null, thumb: await displayablePhotoUrl(r.photo_url || null, r.file_name || ""), fileName: r.file_name || "" })));
         setPins(loaded); fitMapToPins(loaded);
@@ -1135,7 +1375,10 @@ export default function App() {
         const geo = await reverseGeocode(gps.lat, gps.lon);
         const b64 = await photoToDisplayDataUrl(file);
         const { data, error } = await supabase.from("locations").insert({ lat: gps.lat, lon: gps.lon, place: geo.display || "Unknown", city: geo.city || "", country: geo.country || "", date: gps.date || null, photo_url: b64, file_name: file.name, user_id: user.id }).select().single();
-        if (!error) np.push({ id: data.id, lat: gps.lat, lon: gps.lon, place: geo.display || "Unknown", city: geo.city, country: geo.country, date: gps.date || null, thumb: b64, fileName: file.name });
+        if (!error) {
+          np.push({ id: data.id, lat: gps.lat, lon: gps.lon, place: geo.display || "Unknown", city: geo.city, country: geo.country, date: gps.date || null, thumb: b64, fileName: file.name });
+          setAllLocations(prev => [{ id: data.id, lat: gps.lat, lon: gps.lon, place: geo.display || "Unknown" }, ...prev]);
+        }
       }
     }
     if (np.length > 0) setPins(prev => { const all = [...prev, ...np]; fitMapToPins(all); return all; });
@@ -1146,6 +1389,20 @@ export default function App() {
   const clearAll = async () => {
     if (pins.length > 0) await supabase.from("locations").delete().in("id", pins.map(p => p.id));
     setPins([]); setSelectedPin(null); setCenter({ lat: 1.35, lon: 103.82 }); setZoom(3);
+    setAllLocations(prev => prev.filter(location => !pins.some(pin => pin.id === location.id)));
+  };
+
+  const togglePopularPlaces = () => {
+    setShowHeatmap(value => {
+      const next = !value;
+      if (next && publicHeatPoints.length > 0) {
+        setCenter(publicHeatView.center);
+        setZoom(publicHeatView.zoom);
+      } else if (!next) {
+        fitMapToPins(pins);
+      }
+      return next;
+    });
   };
 
   const deletePin = async (pin) => {
@@ -1161,6 +1418,7 @@ export default function App() {
       fitMapToPins(next);
       return next;
     });
+    setAllLocations(prev => prev.filter(location => location.id !== pin.id));
   };
 
   const handleLogout = async () => { await supabase.auth.signOut(); setPins([]); setUser(null); setProfile(null); };
@@ -1188,6 +1446,7 @@ export default function App() {
       {/* Lightbox */}
       <Lightbox pin={lightboxPin} onClose={() => setLightboxPin(null)} onDelete={deletePin} />
       <ProfileLightbox profile={showProfilePreview ? profile : null} user={user} onClose={() => setShowProfilePreview(false)} />
+      {showTutorial && <TutorialModal onClose={() => setShowTutorial(false)} />}
 
       {/* Edit Profile */}
       {showEditProfile && profile && <EditProfile profile={profile} onSave={(p) => { setProfile(p); setShowEditProfile(false); }} onClose={() => setShowEditProfile(false)} />}
@@ -1242,6 +1501,9 @@ export default function App() {
                 <button onClick={() => { setShowEditProfile(true); setShowUserMenu(false); }} style={menuItemStyle}>
                   <span>✎</span> Edit Profile
                 </button>
+                <button onClick={() => { setShowTutorial(true); setShowUserMenu(false); }} style={menuItemStyle}>
+                  <span>?</span> Tutorial
+                </button>
                 <div style={{ height: 1, background: "rgba(255,255,255,0.06)" }} />
                 <button onClick={() => { handleLogout(); setShowUserMenu(false); }} style={{ ...menuItemStyle, color: palette.accent }}>
                   <span>↩</span> Log Out
@@ -1293,13 +1555,13 @@ export default function App() {
         </div>
 
         <div style={{ flex: 1, position: "relative" }} onDragOver={(e) => { e.preventDefault(); setDragOver(true); }} onDragLeave={() => setDragOver(false)} onDrop={(e) => { e.preventDefault(); setDragOver(false); processFiles(e.dataTransfer.files); }}>
-          <SlippyMap pins={pins} center={center} zoom={zoom} onPinClick={(p) => setLightboxPin(p)} />
+          <SlippyMap pins={pins} heatPoints={showHeatmap ? publicHeatPoints : []} center={center} zoom={zoom} onPinClick={(p) => setLightboxPin(p)} />
 
           {loading && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 25, background: "rgba(10,10,15,0.8)" }}>
             <div style={{ textAlign: "center" }}><div style={{ width: 32, height: 32, border: "3px solid rgba(230,57,70,0.3)", borderTop: "3px solid #E63946", borderRadius: "50%", animation: "spin 0.8s linear infinite", margin: "0 auto 16px" }} /><div style={{ fontSize: 16, opacity: 0.7 }}>Loading your travels...</div></div>
           </div>}
 
-          {!loading && pins.length === 0 && !processing && (
+          {!loading && pins.length === 0 && !processing && !showHeatmap && (
             <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 20, background: "rgba(10,10,15,0.7)", backdropFilter: "blur(4px)" }}>
               <div style={{ textAlign: "center", padding: 48, border: `2px dashed ${palette.line}`, borderRadius: 24, background: "rgba(255,255,255,0.055)", maxWidth: 420, boxShadow: "0 22px 70px rgba(0,0,0,0.22)" }}>
                 <div style={{ display: "flex", justifyContent: "center", marginBottom: 18 }}><LogoMark size={64} /></div>
@@ -1311,7 +1573,16 @@ export default function App() {
             </div>
           )}
 
-          {pins.length > 0 && <button onClick={() => fileInputRef.current?.click()} style={{ position: "absolute", top: 16, left: 16, zIndex: 30, background: `linear-gradient(135deg, ${palette.accent}, ${palette.accentDark})`, color: "white", border: "none", padding: "10px 20px", borderRadius: 14, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", boxShadow: "0 12px 28px rgba(255,107,74,0.25)", display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontSize: 18 }}>+</span> Add Photos</button>}
+          <div style={{ position: "absolute", top: 16, left: 16, zIndex: 30, display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button onClick={() => fileInputRef.current?.click()} style={{ background: `linear-gradient(135deg, ${palette.accent}, ${palette.accentDark})`, color: "white", border: "none", padding: "10px 18px", borderRadius: 14, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", boxShadow: "0 12px 28px rgba(255,107,74,0.25)", display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontSize: 18 }}>+</span> Add Photos</button>
+            <button onClick={togglePopularPlaces} style={{ ...secondaryBtnStyle, padding: "10px 14px", background: showHeatmap ? "rgba(66,217,184,0.22)" : "rgba(17,24,39,0.78)", border: showHeatmap ? `1px solid ${palette.mint}` : `1px solid ${palette.line}`, boxShadow: "0 12px 28px rgba(0,0,0,0.18)" }}>
+              Popular Places
+            </button>
+          </div>
+
+          {showHeatmap && <div style={{ position: "absolute", left: 16, bottom: 16, zIndex: 30, background: "rgba(17,24,39,0.82)", border: `1px solid ${palette.line}`, borderRadius: 12, padding: "9px 12px", color: palette.text, fontSize: 12, boxShadow: "0 12px 30px rgba(0,0,0,0.2)" }}>
+            Showing {publicHeatPoints.length} popular place groups
+          </div>}
 
           {dragOver && <div style={{ position: "absolute", inset: 0, zIndex: 40, background: "rgba(230,57,70,0.15)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", border: "3px dashed #E63946", borderRadius: 16, margin: 8 }}><div style={{ fontSize: 22, fontWeight: 700, color: "#E63946" }}>Drop photos here</div></div>}
 

@@ -6,6 +6,17 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+const passwordHelp = "Use at least 8 characters with uppercase, lowercase, number, and symbol.";
+
+function passwordComplexityError(password: string) {
+  if (password.length < 8) return passwordHelp;
+  if (!/[A-Z]/.test(password)) return passwordHelp;
+  if (!/[a-z]/.test(password)) return passwordHelp;
+  if (!/[0-9]/.test(password)) return passwordHelp;
+  if (!/[^A-Za-z0-9]/.test(password)) return passwordHelp;
+  return "";
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -65,6 +76,11 @@ Deno.serve(async (req) => {
 
     if (!userId || (!newEmail && !newPassword)) {
       return json({ error: "Missing userId, newEmail, or newPassword" }, 400);
+    }
+
+    if (newPassword) {
+      const passwordError = passwordComplexityError(newPassword);
+      if (passwordError) return json({ error: passwordError }, 400);
     }
 
     const updates: { email?: string; email_confirm?: boolean; password?: string } = {};
