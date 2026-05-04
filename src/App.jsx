@@ -1251,8 +1251,32 @@ export default function App() {
     cities: new Set(pins.map(p => p.city).filter(Boolean)).size,
   }), [pins]);
   const publicHeatPoints = useMemo(() => groupHeatPoints(allLocations), [allLocations]);
-  const publicHeatView = useMemo(() => heatmapCenter(publicHeatPoints), [publicHeatPoints]);
   const isAdmin = profile?.role === "admin" || ADMIN_EMAILS.includes(user?.email?.toLowerCase() || "");
+
+  const loadGlobalHeatmapLocations = useCallback(async () => {
+    const { data, error } = await supabase.rpc("global_heatmap_locations");
+    if (!error) {
+      setAllLocations(data || []);
+      return data || [];
+    }
+
+    console.warn("Global heatmap RPC unavailable; using direct locations query.", error);
+    const { data: fallbackRows, error: fallbackError } = await supabase
+      .from("locations")
+      .select("id, lat, lon, place")
+      .not("lat", "is", null)
+      .not("lon", "is", null)
+      .order("created_at", { ascending: false });
+
+    if (fallbackError) {
+      console.warn("Global heatmap fallback query failed.", fallbackError);
+      setAllLocations([]);
+      return [];
+    }
+
+    setAllLocations(fallbackRows || []);
+    return fallbackRows || [];
+  }, []);
 
   useEffect(() => {
     if (!user || needsUsername) return;
@@ -1292,16 +1316,10 @@ export default function App() {
     if (!user || needsUsername) return;
     async function loadPins() {
       setLoading(true);
-      const [{ data }, globalHeatmapResult] = await Promise.all([
+      const [{ data }] = await Promise.all([
         supabase.from("locations").select("*").eq("user_id", user.id).order("created_at", { ascending: true }),
-        supabase.rpc("global_heatmap_locations"),
+        loadGlobalHeatmapLocations(),
       ]);
-      if (globalHeatmapResult.error) {
-        const { data: fallbackRows } = await supabase.from("locations").select("id, lat, lon, place").order("created_at", { ascending: false });
-        setAllLocations(fallbackRows || []);
-      } else {
-        setAllLocations(globalHeatmapResult.data || []);
-      }
       if (data && data.length > 0) {
         const loaded = await Promise.all(data.map(async (r) => ({ id: r.id, lat: r.lat, lon: r.lon, place: r.place || "Unknown", city: r.city || "", country: r.country || "", date: r.date || null, thumb: await displayablePhotoUrl(r.photo_url || null, r.file_name || ""), fileName: r.file_name || "" })));
         setPins(loaded); fitMapToPins(loaded);
@@ -1309,7 +1327,7 @@ export default function App() {
       setLoading(false);
     }
     loadPins();
-  }, [user, needsUsername]);
+  }, [user, needsUsername, loadGlobalHeatmapLocations]);
 
   function fitMapToPins(all) {
     if (all.length === 0) { setCenter({ lat: 1.35, lon: 103.82 }); setZoom(3); }
@@ -1408,12 +1426,16 @@ export default function App() {
     setAllLocations(prev => prev.filter(location => !pins.some(pin => pin.id === location.id)));
   };
 
-  const togglePopularPlaces = () => {
+  const togglePopularPlaces = async () => {
+    const latestHeatRows = showHeatmap ? allLocations : await loadGlobalHeatmapLocations();
+    const latestHeatPoints = groupHeatPoints(latestHeatRows);
+    const latestHeatView = heatmapCenter(latestHeatPoints);
+
     setShowHeatmap(value => {
       const next = !value;
-      if (next && publicHeatPoints.length > 0) {
-        setCenter(publicHeatView.center);
-        setZoom(publicHeatView.zoom);
+      if (next && latestHeatPoints.length > 0) {
+        setCenter(latestHeatView.center);
+        setZoom(latestHeatView.zoom);
       } else if (!next) {
         fitMapToPins(pins);
       }

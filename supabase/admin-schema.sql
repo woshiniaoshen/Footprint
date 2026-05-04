@@ -29,7 +29,7 @@ as $$
   order by locations.created_at desc;
 $$;
 
-grant execute on function public.global_heatmap_locations() to authenticated;
+grant execute on function public.global_heatmap_locations() to authenticated, anon;
 
 drop function if exists public.admin_user_accounts();
 
