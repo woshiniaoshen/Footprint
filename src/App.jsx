@@ -106,9 +106,18 @@ function parseExifGPS(file) {
       if (isHeicFile(file, view)) return resolve(parseHeicGPS(view));
       if (view.getUint16(0) !== 0xffd8) return resolve(null);
       let offset = 2;
-      while (offset < view.byteLength - 1) {
-        if (view.getUint16(offset) === 0xffe1) { resolve(parseExif(view, offset + 4)); return; }
-        offset += 2 + view.getUint16(offset + 2);
+      while (offset + 4 <= view.byteLength) {
+        if (view.getUint8(offset) !== 0xff) { offset += 1; continue; }
+        const marker = view.getUint8(offset + 1);
+        if (marker === 0xda || marker === 0xd9) break;
+        if (marker >= 0xd0 && marker <= 0xd7) { offset += 2; continue; }
+        const segmentLength = view.getUint16(offset + 2);
+        if (segmentLength < 2 || offset + 2 + segmentLength > view.byteLength) break;
+        if (marker === 0xe1) {
+          const gps = parseExif(view, offset + 4);
+          if (gps) return resolve(gps);
+        }
+        offset += 2 + segmentLength;
       }
       resolve(null);
     };
@@ -280,7 +289,7 @@ async function reverseGeocode(lat, lon) {
 function fileToBase64(file) { return new Promise((r) => { const rd = new FileReader(); rd.onload = () => r(rd.result); rd.readAsDataURL(file); }); }
 function isPhotoFile(file) {
   const name = file.name?.toLowerCase() || "";
-  return file.type.startsWith("image/") || name.endsWith(".heic") || name.endsWith(".heif");
+  return file.type.startsWith("image/") || /\.(jpe?g|png|webp|heic|heif)$/i.test(name) || name.startsWith("mvimg_");
 }
 function isHeicLike(file) {
   const name = file.name?.toLowerCase() || "";
