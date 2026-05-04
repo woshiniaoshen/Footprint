@@ -1301,43 +1301,46 @@ export default function App() {
   const processFiles = useCallback(async (files) => {
     if (!user) return;
     setProcessing(true);
-    const imgs = Array.from(files).filter(isPhotoFile);
-    const np = [], noGps = [];
-    for (const file of imgs) {
-      const gps = await parseExifGPS(file);
-      if (gps?.lat && gps?.lon) {
-        const geo = await reverseGeocode(gps.lat, gps.lon);
-        const b64 = await photoToDisplayDataUrl(file);
-        const { data, error } = await supabase.from("locations").insert({ lat: gps.lat, lon: gps.lon, place: geo.display || "Unknown", city: geo.city || "", country: geo.country || "", date: gps.date || null, photo_url: b64, file_name: file.name, user_id: user.id }).select().single();
-        if (!error) {
-          np.push({ id: data.id, lat: gps.lat, lon: gps.lon, place: geo.display || "Unknown", city: geo.city, country: geo.country, date: gps.date || null, thumb: b64, fileName: file.name });
-          setAllLocations(prev => [{ id: data.id, lat: gps.lat, lon: gps.lon, place: geo.display || "Unknown" }, ...prev]);
+    await new Promise(resolve => setTimeout(resolve, 30)); // flush so spinner renders
+    try {
+      const imgs = Array.from(files).filter(isPhotoFile);
+      const np = [], noGps = [];
+      for (const file of imgs) {
+        const gps = await parseExifGPS(file);
+        if (gps?.lat && gps?.lon) {
+          const geo = await reverseGeocode(gps.lat, gps.lon);
+          const b64 = await photoToDisplayDataUrl(file);
+          const { data, error } = await supabase.from("locations").insert({ lat: gps.lat, lon: gps.lon, place: geo.display || "Unknown", city: geo.city || "", country: geo.country || "", date: gps.date || null, photo_url: b64, file_name: file.name, user_id: user.id }).select().single();
+          if (!error) {
+            np.push({ id: data.id, lat: gps.lat, lon: gps.lon, place: geo.display || "Unknown", city: geo.city, country: geo.country, date: gps.date || null, thumb: b64, fileName: file.name });
+            setAllLocations(prev => [{ id: data.id, lat: gps.lat, lon: gps.lon, place: geo.display || "Unknown" }, ...prev]);
+          }
+        } else {
+          noGps.push(file);
         }
-      } else {
-        noGps.push(file);
       }
-    }
-    if (np.length > 0) setPins(prev => { const all = [...prev, ...np]; fitMapToPins(all); return all; });
-    setProcessing(false); // stop spinner — GPS phase done
-
-    if (noGps.length > 0) {
-      // Try device geolocation for a suggested location
-      const pos = await Promise.race([
-        new Promise(resolve => {
-          if (!navigator.geolocation) return resolve(null);
-          navigator.geolocation.getCurrentPosition(p => resolve(p), () => resolve(null), { timeout: 6000 });
-        }),
-        new Promise(resolve => setTimeout(() => resolve(null), 7000)),
-      ]);
-      let suggestion = null;
-      if (pos) {
-        const geo = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
-        suggestion = { lat: pos.coords.latitude, lon: pos.coords.longitude, place: geo.display };
+      if (np.length > 0) setPins(prev => { const all = [...prev, ...np]; fitMapToPins(all); return all; });
+      if (noGps.length > 0) {
+        // Try device geolocation for a suggested location
+        const pos = await Promise.race([
+          new Promise(resolve => {
+            if (!navigator.geolocation) return resolve(null);
+            navigator.geolocation.getCurrentPosition(p => resolve(p), () => resolve(null), { timeout: 6000 });
+          }),
+          new Promise(resolve => setTimeout(() => resolve(null), 7000)),
+        ]);
+        let suggestion = null;
+        if (pos) {
+          const geo = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
+          suggestion = { lat: pos.coords.latitude, lon: pos.coords.longitude, place: geo.display };
+        }
+        const queued = await Promise.all(noGps.map(async f => ({
+          file: f, thumb: await photoToDisplayDataUrl(f), fileName: f.name, suggestion,
+        })));
+        setPendingPhotos(prev => [...prev, ...queued]);
       }
-      const queued = await Promise.all(noGps.map(async f => ({
-        file: f, thumb: await photoToDisplayDataUrl(f), fileName: f.name, suggestion,
-      })));
-      setPendingPhotos(prev => [...prev, ...queued]);
+    } finally {
+      setProcessing(false);
     }
   }, [user, savePhotoAt]);
 
