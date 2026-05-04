@@ -108,7 +108,10 @@ function numToDeg(x, y, zoom) {
 async function parseExifGPS(file) {
   try {
     const exifr = await import("exifr");
-    const gps = await exifr.gps(file);
+    const gps = await Promise.race([
+      exifr.gps(file),
+      new Promise(resolve => setTimeout(() => resolve(null), 10000)),
+    ]);
     if (gps?.latitude == null || gps?.longitude == null) return null;
     return { lat: gps.latitude, lon: gps.longitude, date: null };
   } catch { return null; }
@@ -1315,21 +1318,27 @@ export default function App() {
       }
     }
     if (np.length > 0) setPins(prev => { const all = [...prev, ...np]; fitMapToPins(all); return all; });
+    setProcessing(false); // stop spinner — GPS phase done
+
     if (noGps.length > 0) {
-      // Try device geolocation first
-      const pos = await new Promise(resolve => {
-        if (!navigator.geolocation) return resolve(null);
-        navigator.geolocation.getCurrentPosition(p => resolve(p), () => resolve(null), { timeout: 8000 });
-      });
+      // Try device geolocation for a suggested location
+      const pos = await Promise.race([
+        new Promise(resolve => {
+          if (!navigator.geolocation) return resolve(null);
+          navigator.geolocation.getCurrentPosition(p => resolve(p), () => resolve(null), { timeout: 6000 });
+        }),
+        new Promise(resolve => setTimeout(() => resolve(null), 7000)),
+      ]);
+      let suggestion = null;
       if (pos) {
-        for (const file of noGps) await savePhotoAt(file, pos.coords.latitude, pos.coords.longitude, null);
-      } else {
-        // Queue for manual map placement
-        const queued = await Promise.all(noGps.map(async f => ({ file: f, thumb: await photoToDisplayDataUrl(f), fileName: f.name })));
-        setPendingPhotos(prev => [...prev, ...queued]);
+        const geo = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
+        suggestion = { lat: pos.coords.latitude, lon: pos.coords.longitude, place: geo.display };
       }
+      const queued = await Promise.all(noGps.map(async f => ({
+        file: f, thumb: await photoToDisplayDataUrl(f), fileName: f.name, suggestion,
+      })));
+      setPendingPhotos(prev => [...prev, ...queued]);
     }
-    setProcessing(false);
   }, [user, savePhotoAt]);
 
   const clearAll = async () => {
@@ -1382,10 +1391,27 @@ export default function App() {
       navigator.geolocation.getCurrentPosition(p => resolve(p), () => resolve(null), { timeout: 8000 });
     });
     if (!pos) return;
+    const geo = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
+    setPendingPhotos(prev => {
+      const [first, ...rest] = prev;
+      return [{ ...first, suggestion: { lat: pos.coords.latitude, lon: pos.coords.longitude, place: geo.display } }, ...rest];
+    });
+  }, [pendingPhotos]);
+
+  const handleConfirmSuggestion = useCallback(async () => {
+    if (pendingPhotos.length === 0) return;
     const [current, ...rest] = pendingPhotos;
+    if (!current.suggestion) return;
     setPendingPhotos(rest);
-    await savePhotoAt(current.file, pos.coords.latitude, pos.coords.longitude, current.thumb);
+    await savePhotoAt(current.file, current.suggestion.lat, current.suggestion.lon, current.thumb);
   }, [pendingPhotos, savePhotoAt]);
+
+  const handleDismissSuggestion = useCallback(() => {
+    setPendingPhotos(prev => {
+      const [first, ...rest] = prev;
+      return [{ ...first, suggestion: null }, ...rest];
+    });
+  }, []);
 
   const sortedPins = [...pins].sort((a, b) => { if (!a.date && !b.date) return 0; if (!a.date) return 1; if (!b.date) return -1; return a.date.localeCompare(b.date); });
 
@@ -1489,20 +1515,41 @@ export default function App() {
       {showUserMenu && <div onClick={() => setShowUserMenu(false)} style={{ position: "fixed", inset: 0, zIndex: 5 }} />}
 
       {/* Placement mode banner */}
-      {pendingPhotos.length > 0 && (
-        <div style={{ position: "fixed", top: isMobile ? 58 : 78, left: "50%", transform: "translateX(-50%)", zIndex: 200, background: "rgba(17,24,39,0.96)", border: `1px solid ${palette.gold}`, borderRadius: 16, padding: "12px 18px", display: "flex", alignItems: "center", gap: 12, boxShadow: "0 8px 32px rgba(0,0,0,0.4)", maxWidth: "calc(100vw - 32px)" }}>
-          {pendingPhotos[0].thumb && <img src={pendingPhotos[0].thumb} alt="" style={{ width: 40, height: 40, borderRadius: 8, objectFit: "cover", flexShrink: 0 }} />}
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: palette.gold }}>No GPS — tap the map to place</div>
-            <div style={{ fontSize: 11, opacity: 0.55, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{pendingPhotos[0].fileName}{pendingPhotos.length > 1 ? ` (+${pendingPhotos.length - 1} more)` : ""}</div>
+      {pendingPhotos.length > 0 && (() => {
+        const cur = pendingPhotos[0];
+        const hasSuggestion = !!cur.suggestion;
+        return (
+          <div style={{ position: "fixed", top: isMobile ? 58 : 78, left: "50%", transform: "translateX(-50%)", zIndex: 200, background: "rgba(17,24,39,0.97)", border: `1px solid ${hasSuggestion ? palette.mint : palette.gold}`, borderRadius: 16, padding: "12px 16px", display: "flex", alignItems: "center", gap: 12, boxShadow: "0 8px 32px rgba(0,0,0,0.4)", maxWidth: "calc(100vw - 24px)" }}>
+            {cur.thumb && <img src={cur.thumb} alt="" style={{ width: 40, height: 40, borderRadius: 8, objectFit: "cover", flexShrink: 0 }} />}
+            <div style={{ minWidth: 0, flex: 1 }}>
+              {hasSuggestion ? (
+                <>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: palette.mint }}>Is this location correct?</div>
+                  <div style={{ fontSize: 12, opacity: 0.8, marginTop: 1 }}>{cur.suggestion.place}</div>
+                  <div style={{ fontSize: 10, opacity: 0.45, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cur.fileName}</div>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: palette.gold }}>No GPS — tap map to place</div>
+                  <div style={{ fontSize: 10, opacity: 0.45, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cur.fileName}{pendingPhotos.length > 1 ? ` (+${pendingPhotos.length - 1} more)` : ""}</div>
+                </>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>
+              {hasSuggestion ? (
+                <>
+                  <button onClick={handleConfirmSuggestion} style={{ ...secondaryBtnStyle, padding: "8px 12px", fontSize: 12, border: `1px solid ${palette.mint}`, color: palette.mint }}>✓ Yes</button>
+                  <button onClick={handleDismissSuggestion} style={{ ...secondaryBtnStyle, padding: "8px 10px", fontSize: 12 }}>Tap map</button>
+                </>
+              ) : (
+                navigator.geolocation && <button onClick={handleUseMyLocation} style={{ ...secondaryBtnStyle, padding: "8px 10px", fontSize: 12, border: `1px solid ${palette.mint}`, color: palette.mint }}>📍 My location</button>
+              )}
+              <button onClick={() => setPendingPhotos(prev => prev.slice(1))} style={{ ...secondaryBtnStyle, padding: "8px 10px", fontSize: 12, opacity: 0.6 }}>Skip</button>
+              <button onClick={() => setPendingPhotos([])} style={{ ...dangerBtnStyle, padding: "8px 10px", fontSize: 12 }}>✕</button>
+            </div>
           </div>
-          <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
-            {navigator.geolocation && <button onClick={handleUseMyLocation} style={{ ...secondaryBtnStyle, padding: "8px 12px", fontSize: 12, border: `1px solid ${palette.mint}`, color: palette.mint }}>📍 Use my location</button>}
-            <button onClick={() => setPendingPhotos(prev => prev.slice(1))} style={{ ...secondaryBtnStyle, padding: "8px 10px", fontSize: 12, opacity: 0.6 }}>Skip</button>
-            <button onClick={() => setPendingPhotos([])} style={{ ...dangerBtnStyle, padding: "8px 10px", fontSize: 12 }}>✕</button>
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Main content */}
       <div style={{ display: "flex", height: isMobile ? "calc(100dvh - 58px)" : "calc(100vh - 76px)", position: "relative", zIndex: 5 }}>
@@ -1602,7 +1649,7 @@ export default function App() {
           {processing && <div style={{ position: "absolute", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 50, background: "rgba(15,15,15,0.92)", color: "#e8e6e1", padding: "12px 24px", borderRadius: 12, fontSize: 14, boxShadow: "0 4px 20px rgba(0,0,0,0.4)", display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{ width: 16, height: 16, border: "2px solid rgba(230,57,70,0.3)", borderTop: "2px solid #E63946", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />Reading GPS data...</div>}
 
-          <input ref={fileInputRef} type="file" multiple accept="image/*,.heic,.heif" capture="environment" style={{ display: "none" }} onChange={(e) => processFiles(e.target.files)} />
+          <input ref={fileInputRef} type="file" multiple accept="image/*,.heic,.heif" style={{ display: "none" }} onChange={(e) => processFiles(e.target.files)} />
           {/* Mobile FAB */}
           {isMobile && (
             <button onClick={() => fileInputRef.current?.click()} style={{ position: "absolute", bottom: 24, right: 16, zIndex: 30, width: 56, height: 56, borderRadius: "50%", background: `linear-gradient(135deg, ${palette.accent}, ${palette.accentDark})`, color: "white", border: "none", fontSize: 26, fontWeight: 700, cursor: "pointer", boxShadow: "0 8px 24px rgba(255,107,74,0.45)", display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
