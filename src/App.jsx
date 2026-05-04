@@ -409,8 +409,42 @@ function AdminPanel({ currentUser, onClose }) {
     return groupHeatPoints(uploads);
   }, [uploads]);
   const heatView = useMemo(() => heatmapCenter(heatPoints), [heatPoints]);
+  const adminUsers = useMemo(() => {
+    const usersById = new Map(profiles.map(person => [person.id, person]));
+    for (const authUser of authUsers.values()) {
+      const profileUser = usersById.get(authUser.id);
+      if (profileUser) {
+        usersById.set(authUser.id, {
+          ...profileUser,
+          email: authUser.email || profileUser.email,
+          username: profileUser.username || authUser.username,
+          avatar_url: profileUser.avatar_url || authUser.avatar_url,
+          role: profileUser.role || authUser.role || "user",
+          hasProfile: true,
+        });
+      } else {
+        const hasProfile = authUser.has_profile ?? Boolean(authUser.username || authUser.avatar_url);
+        usersById.set(authUser.id, {
+          id: authUser.id,
+          email: authUser.email,
+          username: authUser.username || authUser.email?.split("@")[0] || "no_profile",
+          role: authUser.role || "user",
+          avatar_url: authUser.avatar_url || null,
+          hasProfile,
+        });
+      }
+    }
+    return [...usersById.values()].sort((a, b) => {
+      const aUploads = uploadCounts.get(a.id) || 0;
+      const bUploads = uploadCounts.get(b.id) || 0;
+      if (aUploads !== bUploads) return bUploads - aUploads;
+      const aLabel = authUsers.get(a.id)?.email || a.email || a.username || "";
+      const bLabel = authUsers.get(b.id)?.email || b.email || b.username || "";
+      return aLabel.localeCompare(bLabel);
+    });
+  }, [profiles, authUsers, uploadCounts]);
   const effectiveUserId = userId || selectedUserId;
-  const selectedUser = profiles.find(person => person.id === effectiveUserId);
+  const selectedUser = adminUsers.find(person => person.id === effectiveUserId);
   const selectedEmail = selectedUser ? userEmail(selectedUser) : "";
   const filteredUploads = effectiveUserId ? uploads.filter(upload => upload.user_id === effectiveUserId) : uploads;
 
@@ -456,7 +490,7 @@ function AdminPanel({ currentUser, onClose }) {
 
   const handleUserIdChange = (value) => {
     setUserId(value);
-    setSelectedUserId(profiles.some(person => person.id === value) ? value : "");
+    setSelectedUserId(adminUsers.some(person => person.id === value) ? value : "");
     setNewEmail("");
     setNewPassword("");
     setMessage("");
@@ -469,6 +503,15 @@ function AdminPanel({ currentUser, onClose }) {
     if (error) { setMessage(error.message); return; }
     setUploads(prev => prev.filter(item => item.id !== upload.id));
     setMessage("Upload deleted");
+  };
+
+  const handleBackfillProfiles = async () => {
+    setMessage("");
+    const { data, error } = await supabase.rpc("admin_backfill_missing_profiles");
+    if (error) { setMessage(error.message); return; }
+    const { data: profileRows } = await supabase.from("profiles").select("*");
+    setProfiles(profileRows || []);
+    setMessage(`Created ${data || 0} missing profile${data === 1 ? "" : "s"}`);
   };
 
   const handleUpdateUserAccount = async () => {
@@ -520,7 +563,7 @@ function AdminPanel({ currentUser, onClose }) {
 
         <div style={{ overflowY: "auto", padding: 24 }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14, marginBottom: 20 }}>
-            <div style={adminStatStyle}><strong>{profiles.length}</strong><span>Users</span></div>
+            <div style={adminStatStyle}><strong>{adminUsers.length}</strong><span>Users</span></div>
             <div style={adminStatStyle}><strong>{uploads.length}</strong><span>Total uploads</span></div>
           </div>
 
@@ -548,7 +591,7 @@ function AdminPanel({ currentUser, onClose }) {
               </div>
               <button onClick={handleUpdateUserAccount} style={authBtnStyle}>Update</button>
             </div>
-            {message && <div style={{ marginTop: 10, fontSize: 12, color: message.includes("updated") ? "#4ade80" : "#E63946" }}>{message}</div>}
+            {message && <div style={{ marginTop: 10, fontSize: 12, color: /updated|deleted|created/i.test(message) ? "#4ade80" : "#E63946" }}>{message}</div>}
             <div style={{ marginTop: 10, color: palette.muted, fontSize: 12, lineHeight: 1.5 }}>
               Emails are loaded from Supabase Auth. Passwords cannot be viewed; type a new password only when you want to replace it.
             </div>
@@ -559,10 +602,13 @@ function AdminPanel({ currentUser, onClose }) {
             )}
           </div>
 
-          <h3 style={{ margin: "0 0 12px", fontSize: 14 }}>All Users</h3>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 12 }}>
+            <h3 style={{ margin: 0, fontSize: 14 }}>All Users</h3>
+            <button onClick={handleBackfillProfiles} style={{ ...secondaryBtnStyle, padding: "8px 10px", fontSize: 12 }}>Create Missing Profiles</button>
+          </div>
           {loading ? <div style={{ color: palette.muted, marginBottom: 22 }}>Loading users...</div> : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14, marginBottom: 26 }}>
-              {profiles.map((person) => (
+              {adminUsers.map((person) => (
                 <div key={person.id} onClick={() => selectAdminUser(person)} style={{ padding: 14, border: effectiveUserId === person.id ? `1px solid ${palette.mint}` : `1px solid ${palette.line}`, borderRadius: 16, background: effectiveUserId === person.id ? "rgba(66,217,184,0.1)" : "rgba(255,255,255,0.055)", display: "flex", gap: 12, alignItems: "center", cursor: "pointer" }}>
                   <div onClick={(e) => { e.stopPropagation(); setPreviewProfile(person); }} title="View profile picture" style={{
                     width: 42, height: 42, borderRadius: "50%", flexShrink: 0,
@@ -575,7 +621,7 @@ function AdminPanel({ currentUser, onClose }) {
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ fontWeight: 800, fontSize: 13 }}>@{person.username || "unknown"}</div>
                     <div style={{ color: palette.muted, fontSize: 11, marginTop: 2 }}>{person.role || "user"} - {userEmail(person) || "email unavailable"}</div>
-                    <div style={{ color: palette.muted, fontSize: 11, marginTop: 2 }}>{uploadCounts.get(person.id) || 0} uploads - password can be reset only</div>
+                    <div style={{ color: palette.muted, fontSize: 11, marginTop: 2 }}>{uploadCounts.get(person.id) || 0} uploads - {person.hasProfile === false ? "profile not set" : "password can be reset only"}</div>
                     <div style={{ color: "rgba(247,243,234,0.36)", fontSize: 10, marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{person.id}</div>
                   </div>
                   <button onClick={(e) => { e.stopPropagation(); selectAdminUser(person); }} style={{ ...secondaryBtnStyle, padding: "8px 10px", fontSize: 11, flexShrink: 0 }}>Select</button>
