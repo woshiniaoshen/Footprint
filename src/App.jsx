@@ -26,12 +26,11 @@ import {
 } from "firebase/firestore";
 
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyAVk2LmV5L7KpECsvS3E-UmhBxP9xHf4WM",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "footprint-e5eff.firebaseapp.com",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "footprint-e5eff",
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "389298776508",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:389298776508:web:f78383048e3735416a3b9",
 };
 
 const firebaseReady = Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);
