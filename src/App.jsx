@@ -24,7 +24,6 @@ import {
   updateDoc,
   where,
 } from "firebase/firestore";
-import { deleteObject, getDownloadURL, getStorage, ref, uploadString } from "firebase/storage";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -39,7 +38,6 @@ const firebaseReady = Boolean(firebaseConfig.apiKey && firebaseConfig.projectId)
 const firebaseApp = firebaseReady ? (getApps()[0] || initializeApp(firebaseConfig)) : null;
 const firebaseAuth = firebaseApp ? getAuth(firebaseApp) : null;
 const firebaseDb = firebaseApp ? getFirestore(firebaseApp) : null;
-const firebaseStorage = firebaseApp ? getStorage(firebaseApp) : null;
 
 function normalizeFirebaseUser(user) {
   if (!user) return null;
@@ -347,12 +345,13 @@ async function extractJpegFromMotionPhoto(file) {
   });
 }
 async function photoToDisplayDataUrl(file) {
-  if (isHeicLike(file)) {
-    const jpeg = await convertHeicToJpeg(file, heicMimeHint(file.name, file.type || "image/heic"));
-    return fileToBase64(jpeg);
-  }
-  if (isMvimgFile(file)) { const jpeg = await extractJpegFromMotionPhoto(file); return fileToBase64(jpeg); }
-  return fileToBase64(file);
+  const blob = isHeicLike(file)
+    ? await convertHeicToJpeg(file, heicMimeHint(file.name, file.type || "image/heic"))
+    : isMvimgFile(file)
+      ? await extractJpegFromMotionPhoto(file)
+      : file;
+  const compressed = await resizeImageBlob(blob, 720, 0.62);
+  return fileToBase64(compressed);
 }
 async function safePhotoToDisplayDataUrl(file) {
   try {
@@ -365,6 +364,29 @@ async function safePhotoToDisplayDataUrl(file) {
       return "";
     }
   }
+}
+function resizeImageBlob(blob, maxSize, quality = 0.72) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxSize / Math.max(img.naturalWidth, img.naturalHeight));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob((resized) => {
+        URL.revokeObjectURL(url);
+        if (resized) resolve(resized);
+        else reject(new Error("Could not compress image"));
+      }, "image/jpeg", quality);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Could not load image"));
+    };
+    img.src = url;
+  });
 }
 async function convertHeicToJpeg(blob, typeHint = "image/heic") {
   const { default: heic2any } = await import("heic2any");
@@ -393,19 +415,6 @@ async function displayablePhotoUrl(photoUrl, fileName = "") {
     return "";
   }
 }
-async function uploadDataUrlToFirebase(dataUrl, userId, kind = "photo") {
-  if (!firebaseStorage) throw new Error("Firebase Storage is not configured.");
-  const key = `users/${userId}/${crypto.randomUUID()}-${kind}.jpg`;
-  const imageRef = ref(firebaseStorage, key);
-  await uploadString(imageRef, dataUrl, "data_url");
-  const url = await getDownloadURL(imageRef);
-  return { key, url };
-}
-async function deleteFirebaseStorageFile(key) {
-  if (!firebaseStorage || !key) return;
-  await deleteObject(ref(firebaseStorage, key)).catch(() => {});
-}
-
 function LogoMark({ size = 42 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 64 64" fill="none" aria-hidden="true">
@@ -1625,7 +1634,7 @@ export default function App() {
         loadGlobalHeatmapLocations(),
       ]);
       if (data && data.length > 0) {
-        const loaded = await Promise.all(data.map(async (r) => ({ id: r.id, lat: r.lat, lon: r.lon, place: r.place || "Unknown", city: r.city || "", country: r.country || "", date: r.date || null, thumb: await displayablePhotoUrl(r.photo_url || null, r.file_name || ""), photoKey: r.photo_key || "", fileName: r.file_name || "", isPublic: Boolean(r.is_public) })));
+        const loaded = await Promise.all(data.map(async (r) => ({ id: r.id, lat: r.lat, lon: r.lon, place: r.place || "Unknown", city: r.city || "", country: r.country || "", date: r.date || null, thumb: await displayablePhotoUrl(r.photo_url || null, r.file_name || ""), fileName: r.file_name || "", isPublic: Boolean(r.is_public) })));
         setPins(loaded); fitMapToPins(loaded);
       }
       setLoading(false);
@@ -1653,13 +1662,6 @@ export default function App() {
         : `Could not load ${file.name}. Please try exporting it as JPG or PNG.`);
       return null;
     }
-    let storedPhoto;
-    try {
-      storedPhoto = await uploadDataUrlToFirebase(b64, user.id, "photo");
-    } catch (storageError) {
-      alert(storageError.message);
-      return null;
-    }
     const { data, error } = await supabase.from("locations").insert({
       lat,
       lon,
@@ -1667,8 +1669,7 @@ export default function App() {
       city: geo.city || "",
       country: geo.country || "",
       date,
-      photo_url: storedPhoto.url,
-      photo_key: storedPhoto.key,
+      photo_url: b64,
       file_name: file.name,
       user_id: user.id,
       is_public: isPublic,
@@ -1677,14 +1678,14 @@ export default function App() {
       alert(error.message);
       return null;
     }
-    const pin = { id: data.id, lat, lon, place: geo.display || "Unknown", city: geo.city, country: geo.country, date, thumb: storedPhoto.url, photoKey: storedPhoto.key, fileName: file.name, isPublic };
+    const pin = { id: data.id, lat, lon, place: geo.display || "Unknown", city: geo.city, country: geo.country, date, thumb: b64, fileName: file.name, isPublic };
     setPins(prev => {
       const all = [...prev, pin];
       fitMapToPins(all);
       return all;
     });
     if (isPublic) {
-      setAllLocations(prev => [{ id: data.id, lat, lon, place: geo.display || "Unknown", thumb: storedPhoto.url, photo_url: storedPhoto.url, file_name: file.name }, ...prev]);
+      setAllLocations(prev => [{ id: data.id, lat, lon, place: geo.display || "Unknown", thumb: b64, photo_url: b64, file_name: file.name }, ...prev]);
     }
     return pin;
   }, [user]);
@@ -1757,7 +1758,6 @@ export default function App() {
     if (!ok) return;
     const { error } = await supabase.from("locations").delete().eq("id", pin.id).eq("user_id", user.id);
     if (error) { alert(error.message); return; }
-    await deleteFirebaseStorageFile(pin.photoKey);
     setLightboxPin(current => current?.id === pin.id ? null : current);
     setSelectedPin(current => current === pin.id ? null : current);
     setPins(prev => {

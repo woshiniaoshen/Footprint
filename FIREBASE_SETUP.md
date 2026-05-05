@@ -15,7 +15,8 @@ Enable:
 
 - Authentication > Sign-in method > Email/password
 - Firestore Database
-- Storage
+
+Do not enable Storage on Spark. New Firebase projects require the Blaze plan for Storage, so this app stores compressed image data directly in Firestore for now.
 
 ## 3. Cloudflare Pages environment variables
 
@@ -25,7 +26,6 @@ In Cloudflare Pages > Settings > Environment variables, add:
 VITE_FIREBASE_API_KEY=...
 VITE_FIREBASE_AUTH_DOMAIN=...
 VITE_FIREBASE_PROJECT_ID=...
-VITE_FIREBASE_STORAGE_BUCKET=...
 VITE_FIREBASE_MESSAGING_SENDER_ID=...
 VITE_FIREBASE_APP_ID=...
 ```
@@ -62,22 +62,8 @@ service cloud.firestore {
 }
 ```
 
-Storage rules:
-
-```text
-rules_version = '2';
-
-service firebase.storage {
-  match /b/{bucket}/o {
-    match /users/{userId}/{fileName} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.uid == userId;
-    }
-  }
-}
-```
-
 ## Current limitations
 
 - Admin changing another user's email/password is not available on Firebase Spark because it needs server admin functions.
 - Existing Supabase data does not automatically migrate. New Firebase test users and uploads will start fresh.
+- Images are compressed and stored in Firestore documents to avoid Firebase Storage/Blaze. This is good enough for development, but real production should move images to object storage later.
