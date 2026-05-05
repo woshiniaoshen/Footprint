@@ -2,12 +2,14 @@ import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { initializeApp, getApps } from "firebase/app";
 import {
   createUserWithEmailAndPassword,
+  confirmPasswordReset as firebaseConfirmPasswordReset,
   getAuth,
   onAuthStateChanged,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signOut as firebaseSignOut,
   updatePassword,
+  verifyPasswordResetCode,
 } from "firebase/auth";
 import {
   addDoc,
@@ -171,13 +173,24 @@ const supabase = {
       try { await updatePassword(firebaseAuth.currentUser, password); return { error: null }; }
       catch (error) { return { error: firebaseError(error) }; }
     },
+    async confirmPasswordReset({ code, password }) {
+      if (!firebaseAuth) return { error: { message: "Firebase is not configured yet." } };
+      try {
+        await verifyPasswordResetCode(firebaseAuth, code);
+        await firebaseConfirmPasswordReset(firebaseAuth, code, password);
+        return { error: null };
+      } catch (error) { return { error: firebaseError(error) }; }
+    },
     async signOut() { if (firebaseAuth) await firebaseSignOut(firebaseAuth); },
   },
   from(table) { return new FirebaseQuery(table); },
   async rpc(name) {
     if (name === "global_heatmap_locations") {
-      const { data, error } = await supabase.from("locations").select("*").eq("is_public", true).order("created_at", { ascending: false });
-      return { data: (data || []).filter(row => row.lat != null && row.lon != null), error };
+      const { data, error } = await supabase.from("locations").select("*").eq("is_public", true);
+      const rows = (data || [])
+        .filter(row => row.lat != null && row.lon != null)
+        .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+      return { data: rows, error };
     }
     if (name === "admin_backfill_missing_profiles") return { data: 0, error: null };
     if (name === "admin_user_accounts") return { data: [], error: null };
@@ -190,7 +203,7 @@ const supabase = {
 
 const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "").split(",").map(email => email.trim().toLowerCase()).filter(Boolean);
-const APP_VERSION = "1.1.1";
+const APP_VERSION = "1.1.2";
 
 function useIsMobile() {
   const [m, setM] = useState(() => window.innerWidth < 640);
@@ -922,7 +935,7 @@ function AuthScreen({ onAuth }) {
 }
 
 // ─── Username Setup Screen ───
-function PasswordResetScreen({ onComplete }) {
+function PasswordResetScreen({ resetCode, onComplete }) {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
@@ -934,9 +947,14 @@ function PasswordResetScreen({ onComplete }) {
     if (passwordError) { setError(passwordError); return; }
     if (password !== confirmPassword) { setError("Passwords do not match"); return; }
     setLoading(true);
-    const { error: e } = await supabase.auth.updateUser({ password });
+    const { error: e } = resetCode
+      ? await supabase.auth.confirmPasswordReset({ code: resetCode, password })
+      : await supabase.auth.updateUser({ password });
     if (e) setError(e.message);
-    else onComplete();
+    else {
+      window.history.replaceState({}, document.title, window.location.origin + window.location.pathname);
+      onComplete();
+    }
     setLoading(false);
   };
 
@@ -1502,11 +1520,16 @@ function Fonts() { return <link href="https://fonts.googleapis.com/css2?family=D
 
 // ─── Main App ───
 export default function App() {
+  const initialPasswordResetCode = useMemo(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("mode") === "resetPassword" ? (params.get("oobCode") || "") : "";
+  }, []);
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [needsUsername, setNeedsUsername] = useState(false);
-  const [needsPasswordReset, setNeedsPasswordReset] = useState(false);
+  const [needsPasswordReset, setNeedsPasswordReset] = useState(() => Boolean(initialPasswordResetCode));
+  const [passwordResetCode, setPasswordResetCode] = useState(initialPasswordResetCode);
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [showProfilePreview, setShowProfilePreview] = useState(false);
@@ -1518,7 +1541,6 @@ export default function App() {
   const [processing, setProcessing] = useState(false);
   const [pendingPhotos, setPendingPhotos] = useState([]);
   const [currentLocation, setCurrentLocation] = useState(null);
-  const [uploadVisibility, setUploadVisibility] = useState("private");
   const [dragOver, setDragOver] = useState(false);
   const [center, setCenter] = useState({ lat: 1.35, lon: 103.82 });
   const [zoom, setZoom] = useState(3);
@@ -1565,14 +1587,11 @@ export default function App() {
       return rows;
     }
 
-    console.warn("Global heatmap RPC unavailable; using direct locations query.", error);
+    console.warn("Global heatmap query failed.", error);
     const { data: fallbackRows, error: fallbackError } = await supabase
       .from("locations")
-      .select("id, lat, lon, place, photo_url, file_name")
-      .eq("is_public", true)
-      .not("lat", "is", null)
-      .not("lon", "is", null)
-      .order("created_at", { ascending: false });
+      .select("*")
+      .eq("is_public", true);
 
     if (fallbackError) {
       console.warn("Global heatmap fallback query failed.", fallbackError);
@@ -1580,7 +1599,10 @@ export default function App() {
       return [];
     }
 
-    const rows = await Promise.all((fallbackRows || []).map(async (row) => ({
+    const publicRows = (fallbackRows || [])
+      .filter(row => row.lat != null && row.lon != null)
+      .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+    const rows = await Promise.all(publicRows.map(async (row) => ({
       ...row,
       thumb: await displayablePhotoUrl(row.photo_url || null, row.file_name || ""),
     })));
@@ -1696,41 +1718,32 @@ export default function App() {
   const processFiles = useCallback(async (files) => {
     if (!user) return;
     setProcessing(true);
-    const isPublicUpload = uploadVisibility === "public";
     await new Promise(resolve => setTimeout(resolve, 30));
     try {
       const imgs = Array.from(files).filter(isPhotoFile);
+      const queued = [];
       const noGps = [];
       for (const file of imgs) {
-        try {
-          const gps = await parseExifGPS(file);
-          if (gps?.lat && gps?.lon) {
-            await savePhotoAt(file, gps.lat, gps.lon, null, gps.date || null, isPublicUpload);
-          } else {
-            noGps.push(file);
-          }
-        } catch {
-          noGps.push(file);
-        }
+        const thumb = await safePhotoToDisplayDataUrl(file);
+        if (!thumb) continue;
+        const gps = await parseExifGPS(file);
+        if (gps?.lat && gps?.lon) queued.push({ file, thumb, fileName: file.name, suggestion: { lat: gps.lat, lon: gps.lon, place: "GPS location from photo" }, date: gps.date || null, isPublic: false });
+        else noGps.push({ file, thumb });
       }
       if (noGps.length > 0) {
         const suggestion = await Promise.race([
           locateCurrentUser({ centerMap: true, timeout: 6000 }),
           new Promise(resolve => setTimeout(() => resolve(null), 7000)),
         ]);
-        const queued = (await Promise.all(noGps.map(async file => {
-          const thumb = await safePhotoToDisplayDataUrl(file);
-          if (!thumb) return null;
-          return { file, thumb, fileName: file.name, suggestion, isPublic: isPublicUpload };
-        }))).filter(Boolean);
-        setPendingPhotos(prev => [...prev, ...queued]);
-        if (queued.length === 0) alert("Could not load the selected image. For HEIC photos, try exporting as JPG or uploading the original photo file.");
+        queued.push(...noGps.map(({ file, thumb }) => ({ file, thumb, fileName: file.name, suggestion, date: null, isPublic: false })));
       }
+      if (queued.length > 0) setPendingPhotos(prev => [...prev, ...queued]);
+      if (imgs.length > 0 && queued.length === 0) alert("Could not load the selected image. For HEIC photos, try exporting as JPG or uploading the original photo file.");
       if (imgs.length === 0) alert("No supported image files found.");
     } finally {
       setProcessing(false);
     }
-  }, [user, savePhotoAt, locateCurrentUser, uploadVisibility]);
+  }, [user, locateCurrentUser]);
 
   const clearAll = async () => {
     if (pins.length > 0) await supabase.from("locations").delete().in("id", pins.map(p => p.id));
@@ -1775,7 +1788,7 @@ export default function App() {
     if (pendingPhotos.length === 0) return;
     const [current, ...rest] = pendingPhotos;
     setPendingPhotos(rest);
-    await savePhotoAt(current.file, geo.lat, geo.lon, current.thumb, null, Boolean(current.isPublic));
+    await savePhotoAt(current.file, geo.lat, geo.lon, current.thumb, current.date || null, Boolean(current.isPublic));
   }, [pendingPhotos, savePhotoAt]);
 
   const handleUseMyLocation = useCallback(async () => {
@@ -1797,8 +1810,16 @@ export default function App() {
     const [current, ...rest] = pendingPhotos;
     if (!current.suggestion) return;
     setPendingPhotos(rest);
-    await savePhotoAt(current.file, current.suggestion.lat, current.suggestion.lon, current.thumb, null, Boolean(current.isPublic));
+    await savePhotoAt(current.file, current.suggestion.lat, current.suggestion.lon, current.thumb, current.date || null, Boolean(current.isPublic));
   }, [pendingPhotos, savePhotoAt]);
+
+  const updatePendingVisibility = useCallback((isPublic) => {
+    setPendingPhotos(prev => {
+      const [first, ...rest] = prev;
+      if (!first) return prev;
+      return [{ ...first, isPublic }, ...rest];
+    });
+  }, []);
 
   const handleDismissSuggestion = useCallback(() => {
     setPendingPhotos(prev => {
@@ -1827,7 +1848,7 @@ export default function App() {
   );
 
   if (!user) return <AuthScreen onAuth={setUser} />;
-  if (needsPasswordReset) return <PasswordResetScreen onComplete={() => setNeedsPasswordReset(false)} />;
+  if (needsPasswordReset) return <PasswordResetScreen resetCode={passwordResetCode} onComplete={() => { setNeedsPasswordReset(false); setPasswordResetCode(""); }} />;
   if (needsUsername) return <UsernameSetup user={user} onComplete={(p) => { setProfile({ id: user.id, ...p }); setNeedsUsername(false); }} />;
 
   return (
@@ -1929,19 +1950,34 @@ export default function App() {
                 <>
                   <div style={{ fontSize: 13, fontWeight: 700, color: palette.mint }}>Is this location correct?</div>
                   <div style={{ fontSize: 12, opacity: 0.8, marginTop: 1 }}>{cur.suggestion.place}</div>
-                  <div style={{ fontSize: 10, opacity: 0.45, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cur.fileName} · {cur.isPublic ? "public" : "private"}</div>
+                  <div style={{ fontSize: 10, opacity: 0.45, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cur.fileName} · choose sharing before saving</div>
                 </>
               ) : (
                 <>
                   <div style={{ fontSize: 13, fontWeight: 700, color: palette.gold }}>No GPS — tap map to place</div>
-                  <div style={{ fontSize: 10, opacity: 0.45, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cur.fileName} · {cur.isPublic ? "public" : "private"}{pendingPhotos.length > 1 ? ` (+${pendingPhotos.length - 1} more)` : ""}</div>
+                  <div style={{ fontSize: 10, opacity: 0.45, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cur.fileName}{pendingPhotos.length > 1 ? ` (+${pendingPhotos.length - 1} more)` : ""} · choose sharing before saving</div>
                 </>
               )}
             </div>
             <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>
+              <div style={{ display: "flex", alignItems: "center", padding: 3, borderRadius: 12, background: "rgba(255,255,255,0.08)", border: `1px solid ${palette.line}` }}>
+                {[{ label: "Private", value: false }, { label: "Public", value: true }].map(option => (
+                  <button key={option.label} onClick={() => updatePendingVisibility(option.value)} style={{
+                    border: "none",
+                    borderRadius: 9,
+                    padding: "7px 9px",
+                    background: Boolean(cur.isPublic) === option.value ? (option.value ? "rgba(66,217,184,0.24)" : "rgba(255,255,255,0.14)") : "transparent",
+                    color: option.value && cur.isPublic ? palette.mint : palette.text,
+                    fontSize: 11,
+                    fontWeight: 800,
+                    cursor: "pointer",
+                    fontFamily: "'DM Sans', sans-serif",
+                  }}>{option.label}</button>
+                ))}
+              </div>
               {hasSuggestion ? (
                 <>
-                  <button onClick={handleConfirmSuggestion} style={{ ...secondaryBtnStyle, padding: "8px 12px", fontSize: 12, border: `1px solid ${palette.mint}`, color: palette.mint }}>✓ Yes</button>
+                  <button onClick={handleConfirmSuggestion} style={{ ...secondaryBtnStyle, padding: "8px 12px", fontSize: 12, border: `1px solid ${palette.mint}`, color: palette.mint }}>Save</button>
                   <button onClick={handleDismissSuggestion} style={{ ...secondaryBtnStyle, padding: "8px 10px", fontSize: 12 }}>Tap map</button>
                 </>
               ) : (
@@ -2047,22 +2083,6 @@ export default function App() {
 
           <div style={{ position: "absolute", top: 16, left: 16, zIndex: 30, display: "flex", gap: 10, flexWrap: "wrap" }}>
             {!isMobile && <button onClick={() => fileInputRef.current?.click()} style={{ background: `linear-gradient(135deg, ${palette.accent}, ${palette.accentDark})`, color: "white", border: "none", padding: "10px 18px", borderRadius: 14, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", boxShadow: "0 12px 28px rgba(255,107,74,0.25)", display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontSize: 18 }}>+</span> Add Photos</button>}
-            <div style={{ display: "flex", alignItems: "center", padding: 3, borderRadius: 14, background: "rgba(17,24,39,0.78)", border: `1px solid ${palette.line}`, boxShadow: "0 12px 28px rgba(0,0,0,0.18)" }}>
-              {["private", "public"].map(option => (
-                <button key={option} onClick={() => setUploadVisibility(option)} style={{
-                  border: "none",
-                  borderRadius: 11,
-                  padding: isMobile ? "8px 10px" : "8px 12px",
-                  background: uploadVisibility === option ? (option === "public" ? "rgba(66,217,184,0.24)" : "rgba(255,255,255,0.13)") : "transparent",
-                  color: uploadVisibility === option && option === "public" ? palette.mint : palette.text,
-                  fontSize: 12,
-                  fontWeight: 800,
-                  cursor: "pointer",
-                  fontFamily: "'DM Sans', sans-serif",
-                  textTransform: "capitalize",
-                }}>{option}</button>
-              ))}
-            </div>
             <button onClick={togglePopularPlaces} style={{ ...secondaryBtnStyle, padding: "10px 14px", background: showHeatmap ? "rgba(66,217,184,0.22)" : "rgba(17,24,39,0.78)", border: showHeatmap ? `1px solid ${palette.mint}` : `1px solid ${palette.line}`, boxShadow: "0 12px 28px rgba(0,0,0,0.18)" }}>
               {isMobile ? "Global" : "Global Popular Places"}
             </button>
