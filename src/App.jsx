@@ -25,18 +25,22 @@ import {
   where,
 } from "firebase/firestore";
 
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyAVk2LmV5L7KpECsvS3E-UmhBxP9xHf4WM",
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "footprint-e5eff.firebaseapp.com",
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "footprint-e5eff",
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "389298776508",
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:389298776508:web:f78383048e3735416a3b9",
+const envOrFallback = (value, fallback) => {
+  const cleanValue = typeof value === "string" ? value.trim() : value;
+  return cleanValue || fallback;
 };
 
-const firebaseReady = Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);
-const firebaseApp = firebaseReady ? (getApps()[0] || initializeApp(firebaseConfig)) : null;
-const firebaseAuth = firebaseApp ? getAuth(firebaseApp) : null;
-const firebaseDb = firebaseApp ? getFirestore(firebaseApp) : null;
+const firebaseConfig = {
+  apiKey: envOrFallback(import.meta.env.VITE_FIREBASE_API_KEY, "AIzaSyAVk2LmV5L7KpECsvS3E-UmhBxP9xHf4WM"),
+  authDomain: envOrFallback(import.meta.env.VITE_FIREBASE_AUTH_DOMAIN, "footprint-e5eff.firebaseapp.com"),
+  projectId: envOrFallback(import.meta.env.VITE_FIREBASE_PROJECT_ID, "footprint-e5eff"),
+  messagingSenderId: envOrFallback(import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID, "389298776508"),
+  appId: envOrFallback(import.meta.env.VITE_FIREBASE_APP_ID, "1:389298776508:web:f78383048e3735416a3b9"),
+};
+
+const firebaseApp = getApps()[0] || initializeApp(firebaseConfig);
+const firebaseAuth = getAuth(firebaseApp);
+const firebaseDb = getFirestore(firebaseApp);
 
 function normalizeFirebaseUser(user) {
   if (!user) return null;
@@ -75,7 +79,7 @@ class FirebaseQuery {
   collectionRef() { return collection(firebaseDb, this.table); }
 
   async matchingDocs() {
-    if (!firebaseReady) throw new Error("Firebase is not configured. Add VITE_FIREBASE_* values.");
+    if (!firebaseDb) throw new Error("Firebase failed to initialize. Reload the app and try again.");
     const idFilters = this.filters.filter(filter => filter.field === "id");
     const fieldFilters = this.filters.filter(filter => filter.field !== "id");
     const clauses = fieldFilters.map(filter => where(filter.field, filter.op, filter.value));
@@ -186,7 +190,7 @@ const supabase = {
 
 const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "").split(",").map(email => email.trim().toLowerCase()).filter(Boolean);
-const APP_VERSION = "1.1.0";
+const APP_VERSION = "1.1.1";
 
 function useIsMobile() {
   const [m, setM] = useState(() => window.innerWidth < 640);
