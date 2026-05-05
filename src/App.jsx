@@ -1,10 +1,191 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { initializeApp, getApps } from "firebase/app";
+import {
+  createUserWithEmailAndPassword,
+  getAuth,
+  onAuthStateChanged,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
+  signOut as firebaseSignOut,
+  updatePassword,
+} from "firebase/auth";
+import {
+  addDoc,
+  collection,
+  deleteDoc,
+  doc,
+  getFirestore,
+  getDoc,
+  getDocs,
+  limit as firestoreLimit,
+  orderBy,
+  query,
+  setDoc,
+  updateDoc,
+  where,
+} from "firebase/firestore";
+import { deleteObject, getDownloadURL, getStorage, ref, uploadString } from "firebase/storage";
 
-const supabase = createClient(
-  "https://dhywbdwveorpkurckflb.supabase.co",
-  "sb_publishable_lFvJV3GM4cuzZ4GMTvUyVw_c-Am1bZU"
-);
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+};
+
+const firebaseReady = Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);
+const firebaseApp = firebaseReady ? (getApps()[0] || initializeApp(firebaseConfig)) : null;
+const firebaseAuth = firebaseApp ? getAuth(firebaseApp) : null;
+const firebaseDb = firebaseApp ? getFirestore(firebaseApp) : null;
+const firebaseStorage = firebaseApp ? getStorage(firebaseApp) : null;
+
+function normalizeFirebaseUser(user) {
+  if (!user) return null;
+  return { id: user.uid, uid: user.uid, email: user.email, raw: user };
+}
+
+function firebaseError(error) {
+  return error ? { message: error.message || String(error) } : null;
+}
+
+class FirebaseQuery {
+  constructor(table) {
+    this.table = table;
+    this.filters = [];
+    this.orderField = null;
+    this.orderDirection = "asc";
+    this.limitCount = null;
+    this.action = "select";
+    this.payload = null;
+    this.singleResult = false;
+    this.selectAfterWrite = false;
+  }
+
+  select() { this.selectAfterWrite = true; return this; }
+  eq(field, value) { this.filters.push({ field, op: "==", value }); return this; }
+  not(field, op, value) { if (op === "is" && value === null) this.filters.push({ field, op: "!=", value: null }); return this; }
+  order(field, options = {}) { this.orderField = field; this.orderDirection = options.ascending === false ? "desc" : "asc"; return this; }
+  limit(count) { this.limitCount = count; return this; }
+  insert(payload) { this.action = "insert"; this.payload = Array.isArray(payload) ? payload[0] : payload; return this; }
+  update(payload) { this.action = "update"; this.payload = payload; return this; }
+  delete() { this.action = "delete"; return this; }
+  in(field, values) { this.filters.push({ field, op: "in", value: values }); return this; }
+  single() { this.singleResult = true; return this.execute(); }
+  then(resolve, reject) { return this.execute().then(resolve, reject); }
+
+  collectionRef() { return collection(firebaseDb, this.table); }
+
+  async matchingDocs() {
+    if (!firebaseReady) throw new Error("Firebase is not configured. Add VITE_FIREBASE_* values.");
+    const idFilters = this.filters.filter(filter => filter.field === "id");
+    const fieldFilters = this.filters.filter(filter => filter.field !== "id");
+    const clauses = fieldFilters.map(filter => where(filter.field, filter.op, filter.value));
+    if (this.orderField) clauses.push(orderBy(this.orderField, this.orderDirection));
+    if (this.limitCount) clauses.push(firestoreLimit(this.limitCount));
+    const snapshot = await getDocs(clauses.length ? query(this.collectionRef(), ...clauses) : this.collectionRef());
+    let rows = snapshot.docs.map(item => ({ ...item.data(), id: item.id }));
+    for (const filter of idFilters) {
+      if (filter.op === "==") rows = rows.filter(row => row.id === String(filter.value));
+      if (filter.op === "in") rows = rows.filter(row => filter.value.map(String).includes(row.id));
+    }
+    return rows;
+  }
+
+  async execute() {
+    try {
+      if (this.action === "select") {
+        const rows = await this.matchingDocs();
+        const data = this.singleResult ? (rows[0] || null) : rows;
+        return { data, error: this.singleResult && !rows[0] ? { message: "No rows found" } : null };
+      }
+
+      if (this.action === "insert") {
+        const payload = { ...this.payload, created_at: this.payload.created_at || new Date().toISOString() };
+        let refDoc;
+        if (payload.id) {
+          refDoc = doc(firebaseDb, this.table, String(payload.id));
+          await setDoc(refDoc, payload, { merge: true });
+        } else {
+          refDoc = await addDoc(this.collectionRef(), payload);
+        }
+        const saved = await getDoc(refDoc);
+        return { data: { id: refDoc.id, ...saved.data() }, error: null };
+      }
+
+      if (this.action === "update") {
+        const rows = await this.matchingDocs();
+        await Promise.all(rows.map(row => updateDoc(doc(firebaseDb, this.table, String(row.id)), this.payload)));
+        return { data: rows.map(row => ({ ...row, ...this.payload })), error: null };
+      }
+
+      if (this.action === "delete") {
+        const rows = await this.matchingDocs();
+        await Promise.all(rows.map(row => deleteDoc(doc(firebaseDb, this.table, String(row.id)))));
+        return { data: rows, error: null };
+      }
+
+      return { data: null, error: null };
+    } catch (error) {
+      return { data: this.singleResult ? null : [], error: firebaseError(error) };
+    }
+  }
+}
+
+const supabase = {
+  auth: {
+    async getSession() {
+      return { data: { session: firebaseAuth?.currentUser ? { user: normalizeFirebaseUser(firebaseAuth.currentUser) } : null } };
+    },
+    onAuthStateChange(callback) {
+      if (!firebaseAuth) {
+        callback("AUTH_STATE_CHANGED", null);
+        return { data: { subscription: { unsubscribe() {} } } };
+      }
+      const unsubscribe = onAuthStateChanged(firebaseAuth, user => callback("AUTH_STATE_CHANGED", { user: normalizeFirebaseUser(user) }));
+      return { data: { subscription: { unsubscribe } } };
+    },
+    async signInWithPassword({ email, password }) {
+      if (!firebaseAuth) return { data: {}, error: { message: "Firebase is not configured yet." } };
+      try {
+        const credential = await signInWithEmailAndPassword(firebaseAuth, email, password);
+        return { data: { user: normalizeFirebaseUser(credential.user) }, error: null };
+      } catch (error) { return { data: {}, error: firebaseError(error) }; }
+    },
+    async signUp({ email, password }) {
+      if (!firebaseAuth) return { data: {}, error: { message: "Firebase is not configured yet." } };
+      try {
+        const credential = await createUserWithEmailAndPassword(firebaseAuth, email, password);
+        return { data: { user: normalizeFirebaseUser(credential.user), session: { user: normalizeFirebaseUser(credential.user) } }, error: null };
+      } catch (error) { return { data: {}, error: firebaseError(error) }; }
+    },
+    async resetPasswordForEmail(email) {
+      if (!firebaseAuth) return { error: { message: "Firebase is not configured yet." } };
+      try { await sendPasswordResetEmail(firebaseAuth, email); return { error: null }; }
+      catch (error) { return { error: firebaseError(error) }; }
+    },
+    async updateUser({ password }) {
+      if (!firebaseAuth?.currentUser) return { error: { message: "Please log in again before changing your password." } };
+      try { await updatePassword(firebaseAuth.currentUser, password); return { error: null }; }
+      catch (error) { return { error: firebaseError(error) }; }
+    },
+    async signOut() { if (firebaseAuth) await firebaseSignOut(firebaseAuth); },
+  },
+  from(table) { return new FirebaseQuery(table); },
+  async rpc(name) {
+    if (name === "global_heatmap_locations") {
+      const { data, error } = await supabase.from("locations").select("*").eq("is_public", true).order("created_at", { ascending: false });
+      return { data: (data || []).filter(row => row.lat != null && row.lon != null), error };
+    }
+    if (name === "admin_backfill_missing_profiles") return { data: 0, error: null };
+    if (name === "admin_user_accounts") return { data: [], error: null };
+    return { data: null, error: { message: "RPC is not available on Firebase Spark." } };
+  },
+  functions: {
+    async invoke() { return { data: { error: "Admin functions are not available on Firebase Spark." }, error: null }; },
+  },
+};
 
 const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "").split(",").map(email => email.trim().toLowerCase()).filter(Boolean);
@@ -211,6 +392,18 @@ async function displayablePhotoUrl(photoUrl, fileName = "") {
   } catch {
     return "";
   }
+}
+async function uploadDataUrlToFirebase(dataUrl, userId, kind = "photo") {
+  if (!firebaseStorage) throw new Error("Firebase Storage is not configured.");
+  const key = `users/${userId}/${crypto.randomUUID()}-${kind}.jpg`;
+  const imageRef = ref(firebaseStorage, key);
+  await uploadString(imageRef, dataUrl, "data_url");
+  const url = await getDownloadURL(imageRef);
+  return { key, url };
+}
+async function deleteFirebaseStorageFile(key) {
+  if (!firebaseStorage || !key) return;
+  await deleteObject(ref(firebaseStorage, key)).catch(() => {});
 }
 
 function LogoMark({ size = 42 }) {
@@ -1432,7 +1625,7 @@ export default function App() {
         loadGlobalHeatmapLocations(),
       ]);
       if (data && data.length > 0) {
-        const loaded = await Promise.all(data.map(async (r) => ({ id: r.id, lat: r.lat, lon: r.lon, place: r.place || "Unknown", city: r.city || "", country: r.country || "", date: r.date || null, thumb: await displayablePhotoUrl(r.photo_url || null, r.file_name || ""), fileName: r.file_name || "", isPublic: Boolean(r.is_public) })));
+        const loaded = await Promise.all(data.map(async (r) => ({ id: r.id, lat: r.lat, lon: r.lon, place: r.place || "Unknown", city: r.city || "", country: r.country || "", date: r.date || null, thumb: await displayablePhotoUrl(r.photo_url || null, r.file_name || ""), photoKey: r.photo_key || "", fileName: r.file_name || "", isPublic: Boolean(r.is_public) })));
         setPins(loaded); fitMapToPins(loaded);
       }
       setLoading(false);
@@ -1460,6 +1653,13 @@ export default function App() {
         : `Could not load ${file.name}. Please try exporting it as JPG or PNG.`);
       return null;
     }
+    let storedPhoto;
+    try {
+      storedPhoto = await uploadDataUrlToFirebase(b64, user.id, "photo");
+    } catch (storageError) {
+      alert(storageError.message);
+      return null;
+    }
     const { data, error } = await supabase.from("locations").insert({
       lat,
       lon,
@@ -1467,7 +1667,8 @@ export default function App() {
       city: geo.city || "",
       country: geo.country || "",
       date,
-      photo_url: b64,
+      photo_url: storedPhoto.url,
+      photo_key: storedPhoto.key,
       file_name: file.name,
       user_id: user.id,
       is_public: isPublic,
@@ -1476,14 +1677,14 @@ export default function App() {
       alert(error.message);
       return null;
     }
-    const pin = { id: data.id, lat, lon, place: geo.display || "Unknown", city: geo.city, country: geo.country, date, thumb: b64, fileName: file.name, isPublic };
+    const pin = { id: data.id, lat, lon, place: geo.display || "Unknown", city: geo.city, country: geo.country, date, thumb: storedPhoto.url, photoKey: storedPhoto.key, fileName: file.name, isPublic };
     setPins(prev => {
       const all = [...prev, pin];
       fitMapToPins(all);
       return all;
     });
     if (isPublic) {
-      setAllLocations(prev => [{ id: data.id, lat, lon, place: geo.display || "Unknown", thumb: b64, photo_url: b64, file_name: file.name }, ...prev]);
+      setAllLocations(prev => [{ id: data.id, lat, lon, place: geo.display || "Unknown", thumb: storedPhoto.url, photo_url: storedPhoto.url, file_name: file.name }, ...prev]);
     }
     return pin;
   }, [user]);
@@ -1556,6 +1757,7 @@ export default function App() {
     if (!ok) return;
     const { error } = await supabase.from("locations").delete().eq("id", pin.id).eq("user_id", user.id);
     if (error) { alert(error.message); return; }
+    await deleteFirebaseStorageFile(pin.photoKey);
     setLightboxPin(current => current?.id === pin.id ? null : current);
     setSelectedPin(current => current === pin.id ? null : current);
     setPins(prev => {
