@@ -203,7 +203,7 @@ const supabase = {
 
 const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "").split(",").map(email => email.trim().toLowerCase()).filter(Boolean);
-const APP_VERSION = "1.1.3";
+const APP_VERSION = "1.1.4";
 
 function useIsMobile() {
   const [m, setM] = useState(() => window.innerWidth < 640);
@@ -284,7 +284,7 @@ function groupHeatPoints(rows) {
       count: current.count + 1,
       place: current.place || row.place || "Popular place",
       thumb: current.thumb || row.thumb || row.photo_url || "",
-      fileName: current.fileName || row.file_name || "",
+      fileName: current.fileName || row.fileName || row.file_name || "",
       sampleId: current.sampleId || row.id || null,
     });
   }
@@ -1575,6 +1575,7 @@ export default function App() {
   const [pins, setPins] = useState([]);
   const [allLocations, setAllLocations] = useState([]);
   const [showHeatmap, setShowHeatmap] = useState(false);
+  const [heatmapScope, setHeatmapScope] = useState("global");
   const [processing, setProcessing] = useState(false);
   const [pendingPhotos, setPendingPhotos] = useState([]);
   const [currentLocation, setCurrentLocation] = useState(null);
@@ -1594,6 +1595,9 @@ export default function App() {
     cities: new Set(pins.map(p => p.city).filter(Boolean)).size,
   }), [pins]);
   const publicHeatPoints = useMemo(() => groupHeatPoints(allLocations), [allLocations]);
+  const ownHeatPoints = useMemo(() => groupHeatPoints(pins), [pins]);
+  const activeHeatPoints = heatmapScope === "own" ? ownHeatPoints : publicHeatPoints;
+  const activeHeatLabel = heatmapScope === "own" ? "your place groups" : "global place groups";
   const isAdmin = profile?.role === "admin" || ADMIN_EMAILS.includes(user?.email?.toLowerCase() || "");
 
   const locateCurrentUser = useCallback(async ({ centerMap = false, timeout = 8000 } = {}) => {
@@ -1789,7 +1793,7 @@ export default function App() {
   };
 
   const togglePopularPlaces = async () => {
-    const latestHeatRows = showHeatmap ? allLocations : await loadGlobalHeatmapLocations();
+    const latestHeatRows = heatmapScope === "own" ? pins : (showHeatmap ? allLocations : await loadGlobalHeatmapLocations());
     const latestHeatPoints = groupHeatPoints(latestHeatRows);
     const latestHeatView = heatmapCenter(latestHeatPoints);
 
@@ -1803,6 +1807,18 @@ export default function App() {
       }
       return next;
     });
+  };
+
+  const chooseHeatmapScope = async (scope) => {
+    setHeatmapScope(scope);
+    const rows = scope === "own" ? pins : await loadGlobalHeatmapLocations();
+    const points = groupHeatPoints(rows);
+    const view = heatmapCenter(points);
+    setShowHeatmap(true);
+    if (points.length > 0) {
+      setCenter(view.center);
+      setZoom(view.zoom);
+    }
   };
 
   const deletePin = async (pin) => {
@@ -2092,11 +2108,11 @@ export default function App() {
         <div style={{ flex: 1, position: "relative" }} onDragOver={(e) => { e.preventDefault(); setDragOver(true); }} onDragLeave={() => setDragOver(false)} onDrop={(e) => { e.preventDefault(); setDragOver(false); processFiles(e.dataTransfer.files); }}>
           <SlippyMap
             pins={pins}
-            heatPoints={showHeatmap ? publicHeatPoints : []}
+            heatPoints={showHeatmap ? activeHeatPoints : []}
             center={center}
             zoom={zoom}
             onPinClick={(p) => setLightboxPin(p)}
-            onHeatPointClick={(point) => setPublicSamplePin({ id: point.sampleId, lat: point.lat, lon: point.lon, place: point.place, thumb: point.thumb, fileName: point.fileName || "Public upload" })}
+            onHeatPointClick={(point) => setPublicSamplePin({ id: point.sampleId, lat: point.lat, lon: point.lon, place: point.place, thumb: point.thumb, fileName: point.fileName || (heatmapScope === "own" ? "Your upload" : "Public upload") })}
             onMapClick={pendingPhotos.length > 0 ? handleMapClick : undefined}
             placementMode={pendingPhotos.length > 0}
             currentLocation={currentLocation}
@@ -2120,14 +2136,30 @@ export default function App() {
 
           <div style={{ position: "absolute", top: 16, left: 16, zIndex: 30, display: "flex", gap: 10, flexWrap: "wrap" }}>
             {!isMobile && <button onClick={() => fileInputRef.current?.click()} style={{ background: `linear-gradient(135deg, ${palette.accent}, ${palette.accentDark})`, color: "white", border: "none", padding: "10px 18px", borderRadius: 14, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", boxShadow: "0 12px 28px rgba(255,107,74,0.25)", display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontSize: 18 }}>+</span> Add Photos</button>}
-            <button onClick={togglePopularPlaces} style={{ ...secondaryBtnStyle, padding: "10px 14px", background: showHeatmap ? "rgba(66,217,184,0.22)" : "rgba(17,24,39,0.78)", border: showHeatmap ? `1px solid ${palette.mint}` : `1px solid ${palette.line}`, boxShadow: "0 12px 28px rgba(0,0,0,0.18)" }}>
-              {isMobile ? "Global" : "Global Popular Places"}
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 4, padding: 3, borderRadius: 14, background: "rgba(17,24,39,0.78)", border: `1px solid ${showHeatmap ? palette.mint : palette.line}`, boxShadow: "0 12px 28px rgba(0,0,0,0.18)" }}>
+              {[
+                { value: "global", label: isMobile ? "Global" : "Global Popular Places" },
+                { value: "own", label: isMobile ? "Mine" : "My Popular Places" },
+              ].map(option => (
+                <button key={option.value} onClick={() => chooseHeatmapScope(option.value)} style={{
+                  border: "none",
+                  borderRadius: 11,
+                  padding: isMobile ? "8px 10px" : "8px 12px",
+                  background: showHeatmap && heatmapScope === option.value ? "rgba(66,217,184,0.22)" : "transparent",
+                  color: showHeatmap && heatmapScope === option.value ? palette.mint : palette.text,
+                  fontSize: 12,
+                  fontWeight: 800,
+                  cursor: "pointer",
+                  fontFamily: "'DM Sans', sans-serif",
+                }}>{option.label}</button>
+              ))}
+              {showHeatmap && <button onClick={togglePopularPlaces} title="Hide heatmap" style={{ ...dangerBtnStyle, width: 28, height: 28, padding: 0, borderRadius: 9 }}>x</button>}
+            </div>
             {isMobile && pins.length > 0 && <button onClick={() => setShowTimeline(t => !t)} style={{ ...secondaryBtnStyle, padding: "10px 14px", background: "rgba(17,24,39,0.78)", boxShadow: "0 12px 28px rgba(0,0,0,0.18)" }}>☰</button>}
           </div>
 
           {showHeatmap && <div style={{ position: "absolute", left: 16, bottom: 16, zIndex: 30, background: "rgba(17,24,39,0.82)", border: `1px solid ${palette.line}`, borderRadius: 12, padding: "9px 12px", color: palette.text, fontSize: 12, boxShadow: "0 12px 30px rgba(0,0,0,0.2)" }}>
-            Showing {publicHeatPoints.length} global place groups
+            Showing {activeHeatPoints.length} {activeHeatLabel}
           </div>}
 
           {dragOver && <div style={{ position: "absolute", inset: 0, zIndex: 40, background: "rgba(230,57,70,0.15)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", border: "3px dashed #E63946", borderRadius: 16, margin: 8 }}><div style={{ fontSize: 22, fontWeight: 700, color: "#E63946" }}>Drop photos here</div></div>}
