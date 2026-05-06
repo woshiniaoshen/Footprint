@@ -203,7 +203,7 @@ const supabase = {
 
 const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "").split(",").map(email => email.trim().toLowerCase()).filter(Boolean);
-const APP_VERSION = "1.1.2";
+const APP_VERSION = "1.1.3";
 
 function useIsMobile() {
   const [m, setM] = useState(() => window.innerWidth < 640);
@@ -273,12 +273,14 @@ function heatmapCenter(points) {
 function groupHeatPoints(rows) {
   const grouped = new Map();
   for (const row of rows) {
-    if (!Number.isFinite(row.lat) || !Number.isFinite(row.lon)) continue;
-    const key = `${row.lat.toFixed(1)},${row.lon.toFixed(1)}`;
+    const lat = Number(row.lat);
+    const lon = Number(row.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+    const key = `${lat.toFixed(1)},${lon.toFixed(1)}`;
     const current = grouped.get(key) || { lat: 0, lon: 0, count: 0, place: row.place || "Popular place", thumb: "", fileName: "", sampleId: null };
     grouped.set(key, {
-      lat: current.lat + row.lat,
-      lon: current.lon + row.lon,
+      lat: current.lat + lat,
+      lon: current.lon + lon,
       count: current.count + 1,
       place: current.place || row.place || "Popular place",
       thumb: current.thumb || row.thumb || row.photo_url || "",
@@ -310,8 +312,16 @@ async function parseExifGPS(file) {
       exifr.gps(file),
       new Promise(resolve => setTimeout(() => resolve(null), 10000)),
     ]);
-    if (gps?.latitude == null || gps?.longitude == null) return null;
-    return { lat: gps.latitude, lon: gps.longitude, date: null };
+    if (gps?.latitude != null && gps?.longitude != null) return { lat: gps.latitude, lon: gps.longitude, date: null };
+
+    const parsed = await Promise.race([
+      exifr.parse(file, { gps: true, xmp: true, exif: true, ifd0: true }),
+      new Promise(resolve => setTimeout(() => resolve(null), 10000)),
+    ]);
+    const lat = parsed?.latitude ?? parsed?.GPSLatitude;
+    const lon = parsed?.longitude ?? parsed?.GPSLongitude;
+    if (lat == null || lon == null) return null;
+    return { lat: Number(lat), lon: Number(lon), date: parsed?.DateTimeOriginal?.toISOString?.().slice(0, 10) || null };
   } catch { return null; }
 }
 
@@ -333,17 +343,21 @@ function fileToBase64(file) {
 }
 function isPhotoFile(file) {
   const name = file.name?.toLowerCase() || "";
-  return file.type.startsWith("image/") || /\.(jpe?g|png|webp|heic|heif)$/i.test(name) || name.startsWith("mvimg_");
+  return file.type.startsWith("image/") || /\.(jpe?g|png|webp|heic|heif|heics)$/i.test(name) || name.startsWith("mvimg_");
 }
 function isHeicLike(file) {
   const name = file.name?.toLowerCase() || "";
-  return file.type === "image/heic" || file.type === "image/heif" || name.endsWith(".heic") || name.endsWith(".heif");
+  const type = file.type?.toLowerCase() || "";
+  return type.includes("heic") || type.includes("heif") || name.endsWith(".heic") || name.endsWith(".heif") || name.endsWith(".heics");
 }
 function isMvimgFile(file) {
   return file.name?.toLowerCase().startsWith("mvimg_");
 }
 function heicMimeHint(fileName = "", fallback = "image/heic") {
-  return fileName.toLowerCase().endsWith(".heif") ? "image/heif" : fallback;
+  const lower = fileName.toLowerCase();
+  if (lower.endsWith(".heif")) return "image/heif";
+  if (lower.endsWith(".heics")) return "image/heic-sequence";
+  return fallback || "image/heic";
 }
 async function extractJpegFromMotionPhoto(file) {
   return new Promise((resolve) => {
@@ -373,7 +387,14 @@ async function safePhotoToDisplayDataUrl(file) {
   try {
     return await photoToDisplayDataUrl(file);
   } catch {
-    if (isHeicLike(file)) return "";
+    if (isHeicLike(file)) {
+      try {
+        const compressed = await resizeImageBlob(file, 720, 0.62);
+        return await fileToBase64(compressed);
+      } catch {
+        return "";
+      }
+    }
     try {
       return await fileToBase64(file);
     } catch {
@@ -405,11 +426,27 @@ function resizeImageBlob(blob, maxSize, quality = 0.72) {
   });
 }
 async function convertHeicToJpeg(blob, typeHint = "image/heic") {
-  const { default: heic2any } = await import("heic2any");
-  const source = blob.type && blob.type !== "application/octet-stream" ? blob : new Blob([blob], { type: typeHint });
-  const converted = await heic2any({ blob: source, toType: "image/jpeg", quality: 0.9 });
-  const jpeg = Array.isArray(converted) ? converted[0] : converted;
-  return jpeg.type === "image/jpeg" ? jpeg : new Blob([jpeg], { type: "image/jpeg" });
+  const mod = await import("heic2any");
+  const heic2any = mod.default || mod;
+  const buffer = await blob.arrayBuffer();
+  const candidates = [
+    blob.type && blob.type !== "application/octet-stream" ? blob : null,
+    new Blob([buffer], { type: typeHint }),
+    new Blob([buffer], { type: "image/heic" }),
+    new Blob([buffer], { type: "image/heif" }),
+  ].filter(Boolean);
+
+  let lastError;
+  for (const source of candidates) {
+    try {
+      const converted = await heic2any({ blob: source, toType: "image/jpeg", quality: 0.9 });
+      const jpeg = Array.isArray(converted) ? converted[0] : converted;
+      return jpeg.type === "image/jpeg" ? jpeg : new Blob([jpeg], { type: "image/jpeg" });
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("Could not convert HEIC");
 }
 function dataUrlToBlob(dataUrl) {
   const [meta, data] = dataUrl.split(",");
@@ -1361,11 +1398,11 @@ function SlippyMap({ pins, center, zoom, onPinClick, heatPoints = [], onHeatPoin
           height: 50 + point.strength * 82,
           transform: "translate(-50%, -50%)",
           borderRadius: "50%",
-          background: `radial-gradient(circle, rgba(255,107,74,${0.52 + point.strength * 0.24}) 0%, rgba(242,195,107,${0.24 + point.strength * 0.18}) 42%, rgba(66,217,184,0) 72%)`,
-          mixBlendMode: "multiply",
+          background: `radial-gradient(circle, rgba(255,107,74,${0.68 + point.strength * 0.22}) 0%, rgba(242,195,107,${0.38 + point.strength * 0.22}) 44%, rgba(66,217,184,0.16) 68%, rgba(66,217,184,0) 78%)`,
+          boxShadow: `0 0 ${26 + point.strength * 30}px rgba(255,107,74,0.42)`,
           pointerEvents: point.thumb && onHeatPointClick ? "auto" : "none",
           cursor: point.thumb && onHeatPointClick ? "zoom-in" : "default",
-          zIndex: 5,
+          zIndex: 7,
         }}>
           {point.thumb && (
             <div style={{
@@ -1727,7 +1764,7 @@ export default function App() {
         const thumb = await safePhotoToDisplayDataUrl(file);
         if (!thumb) continue;
         const gps = await parseExifGPS(file);
-        if (gps?.lat && gps?.lon) queued.push({ file, thumb, fileName: file.name, suggestion: { lat: gps.lat, lon: gps.lon, place: "GPS location from photo" }, date: gps.date || null, isPublic: false });
+        if (gps?.lat != null && gps?.lon != null) queued.push({ file, thumb, fileName: file.name, suggestion: { lat: gps.lat, lon: gps.lon, place: "GPS location from photo" }, date: gps.date || null, isPublic: false });
         else noGps.push({ file, thumb });
       }
       if (noGps.length > 0) {
