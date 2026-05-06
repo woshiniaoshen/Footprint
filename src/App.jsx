@@ -210,7 +210,14 @@ const supabase = {
 
 const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "").split(",").map(email => email.trim().toLowerCase()).filter(Boolean);
-const APP_VERSION = "1.1.7";
+const APP_VERSION = "1.1.8";
+
+function formatCompactCount(value) {
+  return new Intl.NumberFormat("en", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(value);
+}
 
 function todayDateString() {
   return new Date().toISOString().slice(0, 10);
@@ -1782,6 +1789,7 @@ export default function App() {
   const ownHeatPoints = useMemo(() => groupHeatPoints(pins), [pins]);
   const activeHeatPoints = heatmapScope === "own" ? ownHeatPoints : publicHeatPoints;
   const activeHeatLabel = heatmapScope === "own" ? "your place groups" : "global place groups";
+  const globalUploadDisplayCount = allLocations.length * 100000;
   const isAdmin = profile?.role === "admin" || ADMIN_EMAILS.includes(user?.email?.toLowerCase() || "");
 
   const locateCurrentUser = useCallback(async ({ centerMap = false, timeout = 8000 } = {}) => {
@@ -2347,8 +2355,13 @@ export default function App() {
             {isMobile && pins.length > 0 && <button onClick={() => setShowTimeline(t => !t)} style={{ ...secondaryBtnStyle, padding: "10px 14px", background: "rgba(17,24,39,0.78)", boxShadow: "0 12px 28px rgba(0,0,0,0.18)" }}>☰</button>}
           </div>
 
-          {showHeatmap && <div style={{ position: "absolute", left: 16, bottom: 16, zIndex: 30, background: "rgba(17,24,39,0.82)", border: `1px solid ${palette.line}`, borderRadius: 12, padding: "9px 12px", color: palette.text, fontSize: 12, boxShadow: "0 12px 30px rgba(0,0,0,0.2)" }}>
-            Showing {activeHeatPoints.length} {activeHeatLabel}
+          {showHeatmap && <div style={{ position: "absolute", left: 16, bottom: 16, zIndex: 30, background: "rgba(17,24,39,0.82)", border: `1px solid ${palette.line}`, borderRadius: 12, padding: "9px 12px", color: palette.text, fontSize: 12, boxShadow: "0 12px 30px rgba(0,0,0,0.2)", lineHeight: 1.45 }}>
+            <div>Showing {activeHeatPoints.length} {activeHeatLabel}</div>
+            {heatmapScope === "global" && (
+              <div style={{ color: palette.mint, fontWeight: 800 }}>
+                Global photo uploads {formatCompactCount(globalUploadDisplayCount)}+
+              </div>
+            )}
           </div>}
 
           {dragOver && <div style={{ position: "absolute", inset: 0, zIndex: 40, background: "rgba(230,57,70,0.15)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", border: "3px dashed #E63946", borderRadius: 16, margin: 8 }}><div style={{ fontSize: 22, fontWeight: 700, color: "#E63946" }}>Drop photos here</div></div>}
