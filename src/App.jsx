@@ -85,14 +85,20 @@ class FirebaseQuery {
     const idFilters = this.filters.filter(filter => filter.field === "id");
     const fieldFilters = this.filters.filter(filter => filter.field !== "id");
     const clauses = fieldFilters.map(filter => where(filter.field, filter.op, filter.value));
-    if (this.orderField) clauses.push(orderBy(this.orderField, this.orderDirection));
-    if (this.limitCount) clauses.push(firestoreLimit(this.limitCount));
+    const canUseServerSort = this.orderField && clauses.length === 0;
+    if (canUseServerSort) clauses.push(orderBy(this.orderField, this.orderDirection));
+    if (this.limitCount && canUseServerSort) clauses.push(firestoreLimit(this.limitCount));
     const snapshot = await getDocs(clauses.length ? query(this.collectionRef(), ...clauses) : this.collectionRef());
     let rows = snapshot.docs.map(item => ({ ...item.data(), id: item.id }));
     for (const filter of idFilters) {
       if (filter.op === "==") rows = rows.filter(row => row.id === String(filter.value));
       if (filter.op === "in") rows = rows.filter(row => filter.value.map(String).includes(row.id));
     }
+    if (this.orderField && !canUseServerSort) {
+      const direction = this.orderDirection === "desc" ? -1 : 1;
+      rows.sort((a, b) => String(a[this.orderField] || "").localeCompare(String(b[this.orderField] || "")) * direction);
+    }
+    if (this.limitCount && !canUseServerSort) rows = rows.slice(0, this.limitCount);
     return rows;
   }
 
@@ -203,7 +209,11 @@ const supabase = {
 
 const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "").split(",").map(email => email.trim().toLowerCase()).filter(Boolean);
-const APP_VERSION = "1.1.4";
+const APP_VERSION = "1.1.5";
+
+function todayDateString() {
+  return new Date().toISOString().slice(0, 10);
+}
 
 function useIsMobile() {
   const [m, setM] = useState(() => window.innerWidth < 640);
@@ -1722,6 +1732,7 @@ export default function App() {
   const savePhotoAt = useCallback(async (file, lat, lon, thumb, date = null, isPublic = false) => {
     const geo = await reverseGeocode(lat, lon);
     const b64 = thumb || await safePhotoToDisplayDataUrl(file);
+    const savedDate = date || todayDateString();
     if (!b64) {
       alert(isHeicLike(file)
         ? `Could not convert ${file.name} from HEIC. Please try exporting it as JPG, or use the original photo file from your Photos app.`
@@ -1734,7 +1745,7 @@ export default function App() {
       place: geo.display || "Unknown",
       city: geo.city || "",
       country: geo.country || "",
-      date,
+      date: savedDate,
       photo_url: b64,
       file_name: file.name,
       user_id: user.id,
@@ -1744,7 +1755,7 @@ export default function App() {
       alert(error.message);
       return null;
     }
-    const pin = { id: data.id, lat, lon, place: geo.display || "Unknown", city: geo.city, country: geo.country, date, thumb: b64, fileName: file.name, isPublic };
+    const pin = { id: data.id, lat, lon, place: geo.display || "Unknown", city: geo.city, country: geo.country, date: savedDate, thumb: b64, fileName: file.name, isPublic };
     setPins(prev => {
       const all = [...prev, pin];
       fitMapToPins(all);
