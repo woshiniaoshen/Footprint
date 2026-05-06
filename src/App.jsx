@@ -209,7 +209,7 @@ const supabase = {
 
 const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "").split(",").map(email => email.trim().toLowerCase()).filter(Boolean);
-const APP_VERSION = "1.1.5";
+const APP_VERSION = "1.1.6";
 
 function todayDateString() {
   return new Date().toISOString().slice(0, 10);
@@ -1383,6 +1383,18 @@ function SlippyMap({ pins, center, zoom, onPinClick, heatPoints = [], onHeatPoin
     setMapState((prev) => { const c2 = degToNum(prev.center.lat, prev.center.lon, prev.zoom); const nc = numToDeg(c2.x - dx / tileSize, c2.y - dy / tileSize, prev.zoom); return { ...prev, center: { lat: nc.lat, lon: nc.lon } }; });
   };
   const handlePointerUp = () => { dragging.current = false; setIsDragging(false); };
+  const openPin = (pin) => {
+    dragging.current = false;
+    dragMoved.current = false;
+    setIsDragging(false);
+    if (onPinClick) onPinClick(pin);
+  };
+  const openHeatPoint = (point) => {
+    dragging.current = false;
+    dragMoved.current = false;
+    setIsDragging(false);
+    if (point.thumb && onHeatPointClick) onHeatPointClick(point);
+  };
   const handleContainerClick = (e) => {
     if (dragMoved.current || !onMapClick || !containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
@@ -1400,7 +1412,7 @@ function SlippyMap({ pins, center, zoom, onPinClick, heatPoints = [], onHeatPoin
       onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onWheel={handleWheel} onClick={handleContainerClick}>
       {tiles.map((t) => <img key={t.key} src={t.url} alt="" style={{ position: "absolute", left: t.left, top: t.top, width: tileSize, height: tileSize, pointerEvents: "none" }} draggable={false} />)}
       {heatPos.map((point, i) => (
-        <div key={`${point.lat}-${point.lon}-${i}`} title={`${point.place}: ${point.count} public uploads`} onClick={(e) => { e.stopPropagation(); if (!dragMoved.current && point.thumb && onHeatPointClick) onHeatPointClick(point); }} style={{
+        <div key={`${point.lat}-${point.lon}-${i}`} title={`${point.place}: ${point.count} public uploads`} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); openHeatPoint(point); }} style={{
           position: "absolute",
           left: point.x,
           top: point.y,
@@ -1415,7 +1427,7 @@ function SlippyMap({ pins, center, zoom, onPinClick, heatPoints = [], onHeatPoin
           zIndex: 7,
         }}>
           {point.thumb && (
-            <div style={{
+            <button type="button" style={{
               position: "absolute",
               left: "50%",
               top: "50%",
@@ -1427,9 +1439,11 @@ function SlippyMap({ pins, center, zoom, onPinClick, heatPoints = [], onHeatPoin
               border: "2px solid white",
               boxShadow: "0 8px 20px rgba(17,24,39,0.28)",
               background: "rgba(17,24,39,0.55)",
+              padding: 0,
+              cursor: "zoom-in",
             }}>
               <img src={point.thumb} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} draggable={false} />
-            </div>
+            </button>
           )}
         </div>
       ))}
@@ -1484,10 +1498,11 @@ function SlippyMap({ pins, center, zoom, onPinClick, heatPoints = [], onHeatPoin
         </div>
       )}
       {pinPos.map((p, i) => (
-        <div key={p.id || i} style={{ position: "absolute", left: p.x, top: p.y, transform: "translate(-50%, -100%)", zIndex: hoveredPin === i ? 20 : 10 }}
+        <div key={p.id || i} style={{ position: "absolute", left: p.x, top: p.y, transform: "translate(-50%, -100%)", zIndex: hoveredPin === i ? 20 : 10, cursor: "zoom-in" }}
           onPointerEnter={() => setHoveredPin(i)} onPointerLeave={() => setHoveredPin(null)}
-          onClick={(e) => { e.stopPropagation(); if (!dragMoved.current && onPinClick) onPinClick(p); }}>
-          <svg width="32" height="42" viewBox="0 0 32 42" fill="none" style={{ cursor: "pointer" }}>
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); openPin(p); }}>
+          <svg width="32" height="42" viewBox="0 0 32 42" fill="none" style={{ cursor: "zoom-in" }}>
             <path d="M16 0C7.16 0 0 7.16 0 16c0 12 16 26 16 26s16-14 16-26C32 7.16 24.84 0 16 0z" fill="#E63946"/><circle cx="16" cy="15" r="7" fill="white"/>
           </svg>
           {hoveredPin === i && (
@@ -1497,9 +1512,9 @@ function SlippyMap({ pins, center, zoom, onPinClick, heatPoints = [], onHeatPoin
             </div>
           )}
           {p.thumb && (
-            <div style={{ position: "absolute", bottom: 46, left: "50%", transform: "translateX(-50%)", width: 44, height: 44, borderRadius: "50%", overflow: "hidden", border: "3px solid white", boxShadow: "0 2px 12px rgba(0,0,0,0.3)", display: hoveredPin === i ? "none" : "block", cursor: "pointer" }}>
+            <button type="button" title="Open photo" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); openPin(p); }} style={{ position: "absolute", bottom: 46, left: "50%", transform: "translateX(-50%)", width: 50, height: 50, borderRadius: "50%", overflow: "hidden", border: "3px solid white", boxShadow: "0 2px 12px rgba(0,0,0,0.3)", display: "block", cursor: "zoom-in", padding: 0, background: "rgba(17,24,39,0.55)" }}>
               <img src={p.thumb} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} draggable={false} />
-            </div>
+            </button>
           )}
         </div>
       ))}
