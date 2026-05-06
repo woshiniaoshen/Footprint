@@ -38,6 +38,7 @@ The app creates these automatically:
 
 - `profiles`
 - `locations`
+- `friends`
 
 ## 5. Suggested Firebase rules for development
 
@@ -57,6 +58,15 @@ service cloud.firestore {
       allow create: if request.auth != null && request.resource.data.user_id == request.auth.uid;
       allow read: if request.auth != null && (resource.data.user_id == request.auth.uid || resource.data.is_public == true);
       allow update, delete: if request.auth != null && resource.data.user_id == request.auth.uid;
+    }
+
+    match /friends/{friendshipId} {
+      allow read: if request.auth != null && request.auth.uid in resource.data.user_ids;
+      allow create: if request.auth != null
+        && request.auth.uid in request.resource.data.user_ids
+        && request.resource.data.user_ids.size() == 2;
+      allow delete: if request.auth != null && request.auth.uid in resource.data.user_ids;
+      allow update: if false;
     }
   }
 }

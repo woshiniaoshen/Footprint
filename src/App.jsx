@@ -68,6 +68,7 @@ class FirebaseQuery {
 
   select() { this.selectAfterWrite = true; return this; }
   eq(field, value) { this.filters.push({ field, op: "==", value }); return this; }
+  contains(field, value) { this.filters.push({ field, op: "array-contains", value }); return this; }
   not(field, op, value) { if (op === "is" && value === null) this.filters.push({ field, op: "!=", value: null }); return this; }
   order(field, options = {}) { this.orderField = field; this.orderDirection = options.ascending === false ? "desc" : "asc"; return this; }
   limit(count) { this.limitCount = count; return this; }
@@ -209,10 +210,14 @@ const supabase = {
 
 const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "").split(",").map(email => email.trim().toLowerCase()).filter(Boolean);
-const APP_VERSION = "1.1.6";
+const APP_VERSION = "1.1.7";
 
 function todayDateString() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function friendDocId(a, b) {
+  return [a, b].sort().join("_");
 }
 
 function useIsMobile() {
@@ -817,6 +822,159 @@ function AdminPanel({ currentUser, onClose }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function FriendsPanel({ currentUser, onClose }) {
+  const [friends, setFriends] = useState([]);
+  const [search, setSearch] = useState("");
+  const [results, setResults] = useState([]);
+  const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [searching, setSearching] = useState(false);
+
+  const loadFriends = useCallback(async () => {
+    setLoading(true);
+    const { data: rows, error } = await supabase.from("friends").select("*").contains("user_ids", currentUser.id);
+    if (error) {
+      setMessage(error.message);
+      setFriends([]);
+      setLoading(false);
+      return;
+    }
+    const friendIds = (rows || []).map(row => row.user_ids?.find(id => id !== currentUser.id)).filter(Boolean);
+    if (friendIds.length === 0) {
+      setFriends([]);
+      setLoading(false);
+      return;
+    }
+    const { data: profiles } = await supabase.from("profiles").select("*").in("id", friendIds);
+    const profileById = new Map((profiles || []).map(person => [person.id, person]));
+    setFriends(friendIds.map(id => ({ id, friendshipId: friendDocId(currentUser.id, id), profile: profileById.get(id) })).filter(item => item.profile));
+    setLoading(false);
+  }, [currentUser.id]);
+
+  useEffect(() => {
+    const id = window.setTimeout(() => loadFriends(), 0);
+    return () => window.clearTimeout(id);
+  }, [loadFriends]);
+
+  const handleSearch = async () => {
+    const username = search.trim().replace(/^@/, "").toLowerCase();
+    setMessage("");
+    setResults([]);
+    if (username.length < 3) { setMessage("Type at least 3 characters"); return; }
+    setSearching(true);
+    const { data, error } = await supabase.from("profiles").select("*").eq("username", username).limit(5);
+    if (error) setMessage(error.message);
+    else setResults((data || []).filter(person => person.id !== currentUser.id));
+    setSearching(false);
+  };
+
+  const addFriend = async (person) => {
+    setMessage("");
+    const friendshipId = friendDocId(currentUser.id, person.id);
+    if (friends.some(item => item.friendshipId === friendshipId)) {
+      setMessage("You are already friends");
+      return;
+    }
+    const { error } = await supabase.from("friends").insert({
+      id: friendshipId,
+      user_ids: [currentUser.id, person.id],
+      requester_id: currentUser.id,
+      friend_id: person.id,
+      status: "accepted",
+    });
+    if (error) {
+      setMessage(error.message.includes("already") || error.message.includes("duplicate") ? "You are already friends" : error.message);
+      return;
+    }
+    setResults([]);
+    setSearch("");
+    setMessage(`Added @${person.username}`);
+    loadFriends();
+  };
+
+  const removeFriend = async (friendshipId, username) => {
+    const ok = window.confirm(`Remove @${username} from your friends?`);
+    if (!ok) return;
+    const { error } = await supabase.from("friends").delete().eq("id", friendshipId);
+    if (error) { setMessage(error.message); return; }
+    setFriends(prev => prev.filter(item => item.friendshipId !== friendshipId));
+    setMessage(`Removed @${username}`);
+  };
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, zIndex: 960, background: "rgba(6,10,18,0.76)",
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
+      backdropFilter: "blur(12px)",
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        width: "min(760px, calc(100vw - 32px))", maxHeight: "calc(100vh - 48px)",
+        overflow: "hidden", borderRadius: 24, background: "rgba(17,24,39,0.96)",
+        border: `1px solid ${palette.line}`, boxShadow: "0 28px 90px rgba(0,0,0,0.46)",
+        display: "flex", flexDirection: "column",
+      }}>
+        <div style={{ padding: "22px 24px", borderBottom: `1px solid ${palette.line}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16 }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800 }}>Friends</h2>
+            <div style={{ marginTop: 4, color: palette.muted, fontSize: 12 }}>Add people by username</div>
+          </div>
+          <button onClick={onClose} style={{ ...secondaryBtnStyle, padding: "10px 14px" }}>Close</button>
+        </div>
+
+        <div style={{ overflowY: "auto", padding: 24 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, marginBottom: 14 }}>
+            <input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSearch()} placeholder="Search username, e.g. golden_skyline37" style={inputStyle} />
+            <button onClick={handleSearch} disabled={searching} style={{ ...authBtnStyle, width: "auto", minWidth: 110 }}>{searching ? "Searching..." : "Search"}</button>
+          </div>
+
+          {message && <div style={{ marginBottom: 14, fontSize: 12, color: /added|removed/i.test(message) ? "#4ade80" : "#F2C36B" }}>{message}</div>}
+
+          {results.length > 0 && (
+            <div style={{ marginBottom: 22 }}>
+              <h3 style={{ margin: "0 0 10px", fontSize: 14 }}>Search Results</h3>
+              <div style={{ display: "grid", gap: 10 }}>
+                {results.map(person => (
+                  <FriendRow key={person.id} person={person} actionLabel="Add Friend" onAction={() => addFriend(person)} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          <h3 style={{ margin: "0 0 10px", fontSize: 14 }}>Your Friends</h3>
+          {loading ? <div style={{ color: palette.muted }}>Loading friends...</div> : friends.length === 0 ? (
+            <div style={{ color: palette.muted, padding: 18, borderRadius: 16, border: `1px solid ${palette.line}`, background: "rgba(255,255,255,0.05)" }}>No friends yet.</div>
+          ) : (
+            <div style={{ display: "grid", gap: 10 }}>
+              {friends.map(item => (
+                <FriendRow key={item.friendshipId} person={item.profile} actionLabel="Remove" danger onAction={() => removeFriend(item.friendshipId, item.profile.username)} />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FriendRow({ person, actionLabel, onAction, danger = false }) {
+  return (
+    <div style={{ padding: 14, border: `1px solid ${palette.line}`, borderRadius: 16, background: "rgba(255,255,255,0.055)", display: "flex", alignItems: "center", gap: 12 }}>
+      <div style={{
+        width: 44, height: 44, borderRadius: "50%", flexShrink: 0,
+        background: person.avatar_url ? `url(${person.avatar_url}) center/cover` : `linear-gradient(135deg, ${palette.accent}, ${palette.sky})`,
+        display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800,
+      }}>
+        {!person.avatar_url && (person.username?.charAt(0).toUpperCase() || "?")}
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 800 }}>@{person.username}</div>
+        <div style={{ color: palette.muted, fontSize: 11, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{person.id}</div>
+      </div>
+      <button onClick={onAction} style={{ ...(danger ? dangerBtnStyle : secondaryBtnStyle), padding: "9px 11px", fontSize: 12, flexShrink: 0 }}>{actionLabel}</button>
     </div>
   );
 }
@@ -1594,6 +1752,7 @@ export default function App() {
   const [passwordResetCode, setPasswordResetCode] = useState(initialPasswordResetCode);
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [showFriendsPanel, setShowFriendsPanel] = useState(false);
   const [showProfilePreview, setShowProfilePreview] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [lightboxPin, setLightboxPin] = useState(null);
@@ -1943,6 +2102,7 @@ export default function App() {
       {/* Edit Profile */}
       {showEditProfile && profile && <EditProfile profile={profile} onSave={(p) => { setProfile(p); setShowEditProfile(false); }} onClose={() => setShowEditProfile(false)} />}
       {showAdminPanel && isAdmin && <AdminPanel currentUser={user} onClose={() => setShowAdminPanel(false)} />}
+      {showFriendsPanel && <FriendsPanel currentUser={user} onClose={() => setShowFriendsPanel(false)} />}
 
       {/* Header */}
       <header style={{ padding: isMobile ? "10px 16px" : "14px 28px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "relative", zIndex: 10, borderBottom: `1px solid ${palette.line}`, background: "rgba(17,24,39,0.72)", backdropFilter: "blur(18px)" }}>
@@ -1999,6 +2159,9 @@ export default function App() {
                 )}
                 <button onClick={() => { setShowEditProfile(true); setShowUserMenu(false); }} style={menuItemStyle}>
                   <span>✎</span> Edit Profile
+                </button>
+                <button onClick={() => { setShowFriendsPanel(true); setShowUserMenu(false); }} style={menuItemStyle}>
+                  <span>+</span> Friends
                 </button>
                 <button onClick={() => { setShowTutorial(true); setShowUserMenu(false); }} style={menuItemStyle}>
                   <span>?</span> Tutorial
