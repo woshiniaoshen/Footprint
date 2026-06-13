@@ -210,7 +210,7 @@ const supabase = {
 
 const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "").split(",").map(email => email.trim().toLowerCase()).filter(Boolean);
-const APP_VERSION = "1.1.9";
+const APP_VERSION = "1.1.10";
 
 function formatCompactCount(value) {
   return new Intl.NumberFormat("en", {
@@ -255,7 +255,7 @@ function svgDataUrl(svg) {
 const DEFAULT_AVATARS = [
   { name: "Summit", image: svgDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="64" fill="#182235"/><circle cx="96" cy="30" r="14" fill="#F2C36B"/><path d="M14 92 45 48l22 30 16-20 31 34v22H14z" fill="#42D9B8"/><path d="M45 48 57 65l-16-5zm38 10 13 15-18-6z" fill="#F7F3EA"/></svg>`) },
   { name: "Coast", image: svgDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="64" fill="#16324A"/><circle cx="90" cy="36" r="18" fill="#FF6B4A"/><path d="M0 84c18-10 34-10 50 0s32 10 50 0c12-7 21-8 28-6v50H0z" fill="#5DADEC"/><path d="M0 100c18-8 34-8 50 0s32 8 50 0c12-5 21-6 28-4v32H0z" fill="#42D9B8"/></svg>`) },
-  { name: "Trail", image: svgDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="64" fill="#1D2B22"/><path d="M24 100c18-28 38-29 55-43 9-8 15-17 20-29" stroke="#F7F3EA" stroke-width="10" stroke-linecap="round" fill="none"/><path d="M40 28c0 17-18 34-18 34S4 45 4 28a18 18 0 1 1 36 0z" fill="#FF6B4A" transform="translate(42 4)"/><circle cx="64" cy="32" r="7" fill="#F7F3EA"/><circle cx="33" cy="95" r="8" fill="#42D9B8"/></svg>`) },
+  { name: "Trail", image: svgDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="64" fill="#1D2B22"/><path d="M25 101c13-22 28-31 43-39 15-8 25-17 35-36" stroke="#F7F3EA" stroke-width="10" stroke-linecap="round" fill="none"/><path d="M65 28c0-10 8-18 18-18s18 8 18 18c0 14-18 32-18 32S65 42 65 28z" fill="#FF6B4A"/><circle cx="83" cy="28" r="7" fill="#F7F3EA"/><circle cx="35" cy="94" r="9" fill="#42D9B8"/></svg>`) },
   { name: "City", image: svgDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="64" fill="#111827"/><rect x="25" y="52" width="18" height="48" rx="4" fill="#5DADEC"/><rect x="50" y="32" width="24" height="68" rx="4" fill="#F7F3EA"/><rect x="82" y="44" width="20" height="56" rx="4" fill="#42D9B8"/><path d="M18 104h92" stroke="#FF6B4A" stroke-width="8" stroke-linecap="round"/><circle cx="87" cy="25" r="10" fill="#F2C36B"/></svg>`) },
   { name: "Compass", image: svgDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="64" fill="#241B2F"/><circle cx="64" cy="64" r="42" fill="#F7F3EA"/><circle cx="64" cy="64" r="34" fill="#17243A"/><path d="m74 27-6 41-31 33 23-43z" fill="#FF6B4A"/><path d="m54 101 6-41 31-33-23 43z" fill="#42D9B8"/><circle cx="64" cy="64" r="7" fill="#F2C36B"/></svg>`) },
   { name: "Passport", image: svgDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="64" fill="#17313B"/><rect x="36" y="24" width="56" height="80" rx="9" fill="#FF6B4A"/><path d="M48 44h32M48 88h24" stroke="#F7F3EA" stroke-width="6" stroke-linecap="round"/><circle cx="64" cy="65" r="15" fill="#42D9B8"/><path d="M49 65h30M64 50c7 8 7 22 0 30M64 50c-7 8-7 22 0 30" stroke="#17313B" stroke-width="3" fill="none"/></svg>`) },
