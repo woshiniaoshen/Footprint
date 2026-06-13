@@ -68,8 +68,16 @@ service cloud.firestore {
       allow create: if request.auth != null
         && request.auth.uid in request.resource.data.user_ids
         && request.resource.data.user_ids.size() == 2;
-      allow delete: if request.auth != null && request.auth.uid in resource.data.user_ids;
-      allow update: if false;
+      allow update, delete: if request.auth != null && request.auth.uid in resource.data.user_ids;
+    }
+
+    match /messages/{messageId} {
+      allow read: if request.auth != null && request.auth.uid in resource.data.user_ids;
+      allow create: if request.auth != null
+        && request.auth.uid == request.resource.data.sender_id
+        && request.auth.uid in request.resource.data.user_ids
+        && request.resource.data.user_ids.size() == 2;
+      allow update, delete: if false;
     }
   }
 }
@@ -80,3 +88,4 @@ service cloud.firestore {
 - Admin changing another user's email/password is not available on Firebase Spark because it needs server admin functions.
 - Existing Supabase data does not automatically migrate. New Firebase test users and uploads will start fresh.
 - Images are compressed and stored in Firestore documents to avoid Firebase Storage/Blaze. This is good enough for development, but real production should move images to object storage later.
+- Friend requests use the `friends` collection. Direct messages use the `messages` collection and are visible only to the two users in `user_ids`.

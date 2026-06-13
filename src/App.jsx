@@ -210,7 +210,7 @@ const supabase = {
 
 const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "").split(",").map(email => email.trim().toLowerCase()).filter(Boolean);
-const APP_VERSION = "1.1.10";
+const APP_VERSION = "1.2.0";
 
 function formatCompactCount(value) {
   return new Intl.NumberFormat("en", {
@@ -834,38 +834,75 @@ function AdminPanel({ currentUser, onClose }) {
 }
 
 function FriendsPanel({ currentUser, onClose }) {
-  const [friends, setFriends] = useState([]);
+  const isMobile = useIsMobile();
+  const currentUserId = currentUser.id || currentUser.uid;
+  const [friendships, setFriendships] = useState([]);
   const [search, setSearch] = useState("");
   const [results, setResults] = useState([]);
+  const [profilesById, setProfilesById] = useState(new Map());
+  const [selectedChat, setSelectedChat] = useState(null);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatText, setChatText] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
+  const [sending, setSending] = useState(false);
 
   const loadFriends = useCallback(async () => {
     setLoading(true);
-    const { data: rows, error } = await supabase.from("friends").select("*").contains("user_ids", currentUser.id);
+    const { data: rows, error } = await supabase.from("friends").select("*").contains("user_ids", currentUserId);
     if (error) {
       setMessage(error.message);
-      setFriends([]);
+      setFriendships([]);
       setLoading(false);
       return;
     }
-    const friendIds = (rows || []).map(row => row.user_ids?.find(id => id !== currentUser.id)).filter(Boolean);
+    const friendIds = [...new Set((rows || []).map(row => row.user_ids?.find(id => id !== currentUserId)).filter(Boolean))];
     if (friendIds.length === 0) {
-      setFriends([]);
+      setFriendships(rows || []);
+      setProfilesById(new Map());
       setLoading(false);
       return;
     }
     const { data: profiles } = await supabase.from("profiles").select("*").in("id", friendIds);
-    const profileById = new Map((profiles || []).map(person => [person.id, person]));
-    setFriends(friendIds.map(id => ({ id, friendshipId: friendDocId(currentUser.id, id), profile: profileById.get(id) })).filter(item => item.profile));
+    setProfilesById(new Map((profiles || []).map(person => [person.id, person])));
+    setFriendships(rows || []);
     setLoading(false);
-  }, [currentUser.id]);
+  }, [currentUserId]);
 
   useEffect(() => {
     const id = window.setTimeout(() => loadFriends(), 0);
     return () => window.clearTimeout(id);
   }, [loadFriends]);
+
+  const enrichedFriendships = useMemo(() => friendships.map(friendship => {
+    const otherId = friendship.user_ids?.find(id => id !== currentUserId);
+    return { ...friendship, otherId, profile: profilesById.get(otherId) };
+  }).filter(item => item.otherId), [friendships, currentUserId, profilesById]);
+
+  const acceptedFriends = enrichedFriendships.filter(item => item.status === "accepted" && item.profile);
+  const incomingRequests = enrichedFriendships.filter(item => item.status === "pending" && item.friend_id === currentUserId && item.profile);
+  const outgoingRequests = enrichedFriendships.filter(item => item.status === "pending" && item.requester_id === currentUserId && item.profile);
+
+  const loadMessages = useCallback(async (friendshipId) => {
+    const { data, error } = await supabase.from("messages").select("*").eq("friendship_id", friendshipId).order("created_at", { ascending: true });
+    if (error) {
+      setMessage(error.message);
+      setChatMessages([]);
+      return;
+    }
+    setChatMessages(data || []);
+  }, []);
+
+  useEffect(() => {
+    if (!selectedChat) return undefined;
+    const firstLoad = window.setTimeout(() => loadMessages(selectedChat.id), 0);
+    const intervalId = window.setInterval(() => loadMessages(selectedChat.id), 5000);
+    return () => {
+      window.clearTimeout(firstLoad);
+      window.clearInterval(intervalId);
+    };
+  }, [selectedChat, loadMessages]);
 
   const handleSearch = async () => {
     const username = search.trim().replace(/^@/, "").toLowerCase();
@@ -875,31 +912,50 @@ function FriendsPanel({ currentUser, onClose }) {
     setSearching(true);
     const { data, error } = await supabase.from("profiles").select("*").eq("username", username).limit(5);
     if (error) setMessage(error.message);
-    else setResults((data || []).filter(person => person.id !== currentUser.id));
+    else setResults((data || []).filter(person => person.id !== currentUserId));
     setSearching(false);
   };
 
-  const addFriend = async (person) => {
+  const requestFriend = async (person) => {
     setMessage("");
-    const friendshipId = friendDocId(currentUser.id, person.id);
-    if (friends.some(item => item.friendshipId === friendshipId)) {
+    const friendshipId = friendDocId(currentUserId, person.id);
+    const existing = friendships.find(item => item.id === friendshipId);
+    if (existing?.status === "accepted") {
       setMessage("You are already friends");
+      return;
+    }
+    if (existing?.status === "pending") {
+      setMessage(existing.requester_id === currentUserId ? "Friend request already sent" : "This person already sent you a request");
       return;
     }
     const { error } = await supabase.from("friends").insert({
       id: friendshipId,
-      user_ids: [currentUser.id, person.id],
-      requester_id: currentUser.id,
+      user_ids: [currentUserId, person.id],
+      requester_id: currentUserId,
       friend_id: person.id,
-      status: "accepted",
+      status: "pending",
     });
     if (error) {
-      setMessage(error.message.includes("already") || error.message.includes("duplicate") ? "You are already friends" : error.message);
+      setMessage(error.message.includes("already") || error.message.includes("duplicate") ? "Friend request already exists" : error.message);
       return;
     }
     setResults([]);
     setSearch("");
-    setMessage(`Added @${person.username}`);
+    setMessage(`Friend request sent to @${person.username}`);
+    loadFriends();
+  };
+
+  const acceptRequest = async (friendship) => {
+    const { error } = await supabase.from("friends").update({ status: "accepted", accepted_at: new Date().toISOString() }).eq("id", friendship.id);
+    if (error) { setMessage(error.message); return; }
+    setMessage(`You are now friends with @${friendship.profile.username}`);
+    loadFriends();
+  };
+
+  const declineRequest = async (friendship) => {
+    const { error } = await supabase.from("friends").delete().eq("id", friendship.id);
+    if (error) { setMessage(error.message); return; }
+    setMessage(`Declined @${friendship.profile.username}`);
     loadFriends();
   };
 
@@ -908,57 +964,127 @@ function FriendsPanel({ currentUser, onClose }) {
     if (!ok) return;
     const { error } = await supabase.from("friends").delete().eq("id", friendshipId);
     if (error) { setMessage(error.message); return; }
-    setFriends(prev => prev.filter(item => item.friendshipId !== friendshipId));
+    setFriendships(prev => prev.filter(item => item.id !== friendshipId));
+    if (selectedChat?.id === friendshipId) {
+      setSelectedChat(null);
+      setChatMessages([]);
+    }
     setMessage(`Removed @${username}`);
+  };
+
+  const sendMessage = async () => {
+    const text = chatText.trim();
+    if (!selectedChat || !text) return;
+    setSending(true);
+    const { error } = await supabase.from("messages").insert({
+      friendship_id: selectedChat.id,
+      user_ids: selectedChat.user_ids,
+      sender_id: currentUserId,
+      text,
+    });
+    if (error) setMessage(error.message);
+    else {
+      setChatText("");
+      await loadMessages(selectedChat.id);
+    }
+    setSending(false);
   };
 
   return (
     <div onClick={onClose} style={{
       position: "fixed", inset: 0, zIndex: 960, background: "rgba(6,10,18,0.76)",
-      display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
+      display: "flex", alignItems: isMobile ? "stretch" : "center", justifyContent: "center", padding: isMobile ? 0 : 24,
       backdropFilter: "blur(12px)",
     }}>
       <div onClick={(e) => e.stopPropagation()} style={{
-        width: "min(760px, calc(100vw - 32px))", maxHeight: "calc(100vh - 48px)",
-        overflow: "hidden", borderRadius: 24, background: "rgba(17,24,39,0.96)",
+        width: isMobile ? "100vw" : "min(920px, calc(100vw - 32px))", maxHeight: isMobile ? "100dvh" : "calc(100vh - 48px)",
+        height: isMobile ? "100dvh" : "auto", overflow: "hidden", borderRadius: isMobile ? 0 : 24, background: "rgba(17,24,39,0.96)",
         border: `1px solid ${palette.line}`, boxShadow: "0 28px 90px rgba(0,0,0,0.46)",
         display: "flex", flexDirection: "column",
       }}>
-        <div style={{ padding: "22px 24px", borderBottom: `1px solid ${palette.line}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16 }}>
+        <div style={{ padding: isMobile ? "16px 18px" : "22px 24px", borderBottom: `1px solid ${palette.line}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16 }}>
           <div>
             <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800 }}>Friends</h2>
-            <div style={{ marginTop: 4, color: palette.muted, fontSize: 12 }}>Add people by username</div>
+            <div style={{ marginTop: 4, color: palette.muted, fontSize: 12 }}>Send requests, accept friends, and chat</div>
           </div>
           <button onClick={onClose} style={{ ...secondaryBtnStyle, padding: "10px 14px" }}>Close</button>
         </div>
 
-        <div style={{ overflowY: "auto", padding: 24 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, marginBottom: 14 }}>
+        <div style={{ overflowY: "auto", padding: isMobile ? 16 : 24 }}>
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr auto", gap: 10, marginBottom: 14 }}>
             <input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSearch()} placeholder="Search username, e.g. golden_skyline37" style={inputStyle} />
             <button onClick={handleSearch} disabled={searching} style={{ ...authBtnStyle, width: "auto", minWidth: 110 }}>{searching ? "Searching..." : "Search"}</button>
           </div>
 
-          {message && <div style={{ marginBottom: 14, fontSize: 12, color: /added|removed/i.test(message) ? "#4ade80" : "#F2C36B" }}>{message}</div>}
+          {message && <div style={{ marginBottom: 14, fontSize: 12, color: /sent|friends|removed|declined/i.test(message) ? "#4ade80" : "#F2C36B" }}>{message}</div>}
 
           {results.length > 0 && (
             <div style={{ marginBottom: 22 }}>
               <h3 style={{ margin: "0 0 10px", fontSize: 14 }}>Search Results</h3>
               <div style={{ display: "grid", gap: 10 }}>
                 {results.map(person => (
-                  <FriendRow key={person.id} person={person} actionLabel="Add Friend" onAction={() => addFriend(person)} />
+                  <FriendRow key={person.id} person={person} actionLabel="Send Request" onAction={() => requestFriend(person)} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {incomingRequests.length > 0 && (
+            <div style={{ marginBottom: 22 }}>
+              <h3 style={{ margin: "0 0 10px", fontSize: 14 }}>Friend Requests</h3>
+              <div style={{ display: "grid", gap: 10 }}>
+                {incomingRequests.map(item => (
+                  <FriendRow key={item.id} person={item.profile} actionLabel="Accept" onAction={() => acceptRequest(item)} secondaryActionLabel="Decline" onSecondaryAction={() => declineRequest(item)} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {outgoingRequests.length > 0 && (
+            <div style={{ marginBottom: 22 }}>
+              <h3 style={{ margin: "0 0 10px", fontSize: 14 }}>Sent Requests</h3>
+              <div style={{ display: "grid", gap: 10 }}>
+                {outgoingRequests.map(item => (
+                  <FriendRow key={item.id} person={item.profile} actionLabel="Cancel" danger onAction={() => declineRequest(item)} statusText="Waiting for accept" />
                 ))}
               </div>
             </div>
           )}
 
           <h3 style={{ margin: "0 0 10px", fontSize: 14 }}>Your Friends</h3>
-          {loading ? <div style={{ color: palette.muted }}>Loading friends...</div> : friends.length === 0 ? (
+          {loading ? <div style={{ color: palette.muted }}>Loading friends...</div> : acceptedFriends.length === 0 ? (
             <div style={{ color: palette.muted, padding: 18, borderRadius: 16, border: `1px solid ${palette.line}`, background: "rgba(255,255,255,0.05)" }}>No friends yet.</div>
           ) : (
-            <div style={{ display: "grid", gap: 10 }}>
-              {friends.map(item => (
-                <FriendRow key={item.friendshipId} person={item.profile} actionLabel="Remove" danger onAction={() => removeFriend(item.friendshipId, item.profile.username)} />
-              ))}
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "minmax(260px, 0.8fr) minmax(0, 1.2fr)", gap: 14 }}>
+              <div style={{ display: "grid", gap: 10, alignContent: "start" }}>
+                {acceptedFriends.map(item => (
+                  <FriendRow key={item.id} person={item.profile} actionLabel="Chat" active={selectedChat?.id === item.id} onAction={() => { setChatMessages([]); setSelectedChat(item); }} secondaryActionLabel="Remove" onSecondaryAction={() => removeFriend(item.id, item.profile.username)} dangerSecondary />
+                ))}
+              </div>
+              <div style={{ minHeight: 280, border: `1px solid ${palette.line}`, borderRadius: 18, background: "rgba(255,255,255,0.045)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+                {selectedChat ? (
+                  <>
+                    <div style={{ padding: "12px 14px", borderBottom: `1px solid ${palette.line}`, fontWeight: 800 }}>Chat with @{selectedChat.profile.username}</div>
+                    <div style={{ flex: 1, overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+                      {chatMessages.length === 0 ? <div style={{ color: palette.muted, fontSize: 13 }}>No messages yet.</div> : chatMessages.map(item => {
+                        const mine = item.sender_id === currentUserId;
+                        return (
+                          <div key={item.id} style={{ alignSelf: mine ? "flex-end" : "flex-start", maxWidth: "82%" }}>
+                            <div style={{ padding: "9px 11px", borderRadius: mine ? "14px 14px 3px 14px" : "14px 14px 14px 3px", background: mine ? "rgba(66,217,184,0.22)" : "rgba(255,255,255,0.08)", color: palette.text, fontSize: 13, lineHeight: 1.35, wordBreak: "break-word" }}>{item.text}</div>
+                            <div style={{ marginTop: 3, textAlign: mine ? "right" : "left", color: palette.muted, fontSize: 10 }}>{item.created_at ? new Date(item.created_at).toLocaleString() : ""}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, padding: 12, borderTop: `1px solid ${palette.line}` }}>
+                      <input value={chatText} onChange={(e) => setChatText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendMessage()} placeholder="Write a message" style={inputStyle} />
+                      <button onClick={sendMessage} disabled={sending || !chatText.trim()} style={{ ...authBtnStyle, width: "auto", minWidth: 82, padding: "0 14px", opacity: sending || !chatText.trim() ? 0.55 : 1 }}>Send</button>
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: palette.muted, padding: 20, textAlign: "center" }}>Select a friend to start chatting.</div>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -967,9 +1093,10 @@ function FriendsPanel({ currentUser, onClose }) {
   );
 }
 
-function FriendRow({ person, actionLabel, onAction, danger = false }) {
+function FriendRow({ person, actionLabel, onAction, secondaryActionLabel, onSecondaryAction, danger = false, dangerSecondary = false, statusText = "", active = false }) {
+  const isMobile = useIsMobile();
   return (
-    <div style={{ padding: 14, border: `1px solid ${palette.line}`, borderRadius: 16, background: "rgba(255,255,255,0.055)", display: "flex", alignItems: "center", gap: 12 }}>
+    <div style={{ padding: 14, border: `1px solid ${active ? palette.mint : palette.line}`, borderRadius: 16, background: active ? "rgba(66,217,184,0.1)" : "rgba(255,255,255,0.055)", display: "flex", alignItems: "center", gap: 12, flexWrap: isMobile ? "wrap" : "nowrap" }}>
       <div style={{
         width: 44, height: 44, borderRadius: "50%", flexShrink: 0,
         background: person.avatar_url ? `url(${person.avatar_url}) center/cover` : `linear-gradient(135deg, ${palette.accent}, ${palette.sky})`,
@@ -980,8 +1107,12 @@ function FriendRow({ person, actionLabel, onAction, danger = false }) {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 800 }}>@{person.username}</div>
         <div style={{ color: palette.muted, fontSize: 11, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{person.id}</div>
+        {statusText && <div style={{ color: palette.gold, fontSize: 11, marginTop: 3 }}>{statusText}</div>}
       </div>
-      <button onClick={onAction} style={{ ...(danger ? dangerBtnStyle : secondaryBtnStyle), padding: "9px 11px", fontSize: 12, flexShrink: 0 }}>{actionLabel}</button>
+      <div style={{ display: "flex", gap: 8, width: isMobile ? "100%" : "auto", justifyContent: isMobile ? "flex-end" : "initial" }}>
+        {secondaryActionLabel && <button onClick={onSecondaryAction} style={{ ...(dangerSecondary ? dangerBtnStyle : secondaryBtnStyle), padding: "9px 11px", fontSize: 12, flexShrink: 0 }}>{secondaryActionLabel}</button>}
+        <button onClick={onAction} style={{ ...(danger ? dangerBtnStyle : secondaryBtnStyle), padding: "9px 11px", fontSize: 12, flexShrink: 0 }}>{actionLabel}</button>
+      </div>
     </div>
   );
 }
@@ -2144,7 +2275,7 @@ export default function App() {
               }}>
                 {!profile?.avatar_url && (profile?.username?.charAt(0).toUpperCase() || "?")}
               </div>
-              <div>
+              <div style={{ display: isMobile ? "none" : "block" }}>
                 <div style={{ fontSize: 13, fontWeight: 600 }}>@{profile?.username}</div>
                 <div style={{ fontSize: 10, opacity: 0.4 }}>{user.email}</div>
               </div>
