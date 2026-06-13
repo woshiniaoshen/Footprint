@@ -210,7 +210,7 @@ const supabase = {
 
 const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "").split(",").map(email => email.trim().toLowerCase()).filter(Boolean);
-const APP_VERSION = "1.2.1";
+const APP_VERSION = "1.2.2";
 
 function formatCompactCount(value) {
   return new Intl.NumberFormat("en", {
@@ -885,14 +885,14 @@ function FriendsPanel({ currentUser, onClose }) {
   const outgoingRequests = enrichedFriendships.filter(item => item.status === "pending" && item.requester_id === currentUserId && item.profile);
 
   const loadMessages = useCallback(async (friendshipId) => {
-    const { data, error } = await supabase.from("messages").select("*").eq("friendship_id", friendshipId).order("created_at", { ascending: true });
+    const { data, error } = await supabase.from("messages").select("*").eq("friendship_id", friendshipId).contains("user_ids", currentUserId).order("created_at", { ascending: true });
     if (error) {
       setMessage(error.message);
       setChatMessages([]);
       return;
     }
     setChatMessages(data || []);
-  }, []);
+  }, [currentUserId]);
 
   useEffect(() => {
     if (!selectedChat) return undefined;
