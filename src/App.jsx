@@ -210,7 +210,7 @@ const supabase = {
 
 const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "").split(",").map(email => email.trim().toLowerCase()).filter(Boolean);
-const APP_VERSION = "1.2.2";
+const APP_VERSION = "1.3.0";
 
 function formatCompactCount(value) {
   return new Intl.NumberFormat("en", {
@@ -1863,6 +1863,51 @@ function TutorialModal({ onClose }) {
   );
 }
 
+function AppToast({ toast, onClose }) {
+  if (!toast) return null;
+  const tone = toast.type === "error"
+    ? { border: "rgba(230,57,70,0.48)", text: "#FFB19F" }
+    : toast.type === "success"
+      ? { border: "rgba(66,217,184,0.48)", text: palette.mint }
+      : { border: "rgba(242,195,107,0.48)", text: palette.gold };
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      style={{
+        position: "fixed",
+        right: 18,
+        bottom: 18,
+        zIndex: 1400,
+        maxWidth: "min(360px, calc(100vw - 36px))",
+        padding: "12px 14px",
+        borderRadius: 14,
+        background: "rgba(17,24,39,0.96)",
+        border: `1px solid ${tone.border}`,
+        color: tone.text,
+        boxShadow: "0 18px 46px rgba(0,0,0,0.34)",
+        display: "grid",
+        gridTemplateColumns: "1fr auto",
+        gap: 12,
+        alignItems: "center",
+        fontSize: 13,
+        fontWeight: 800,
+      }}
+    >
+      <span>{toast.text}</span>
+      <button
+        type="button"
+        aria-label="Dismiss message"
+        onClick={onClose}
+        style={{ ...secondaryBtnStyle, width: 28, height: 28, padding: 0, borderRadius: 9, fontSize: 16, lineHeight: 1 }}
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
 const zoomBtnStyle = { width: 36, height: 36, border: "none", borderRadius: 10, background: "rgba(255,255,255,0.94)", cursor: "pointer", fontSize: 20, fontWeight: 700, color: palette.ink, boxShadow: "0 2px 10px rgba(17,24,39,0.18)", display: "flex", alignItems: "center", justifyContent: "center" };
 
 // ─── Styles ───
@@ -1907,11 +1952,20 @@ export default function App() {
   const [zoom, setZoom] = useState(3);
   const [selectedPin, setSelectedPin] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [toast, setToast] = useState(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showTimeline, setShowTimeline] = useState(false); // mobile sidebar toggle
   const [publicSamplePin, setPublicSamplePin] = useState(null);
   const isMobile = useIsMobile();
   const fileInputRef = useRef(null);
+
+  const notify = useCallback((text, type = "info") => {
+    const id = Date.now();
+    setToast({ id, text, type });
+    window.setTimeout(() => {
+      setToast(current => current?.id === id ? null : current);
+    }, 4200);
+  }, []);
 
   const stats = useMemo(() => ({
     countries: new Set(pins.map(p => p.country).filter(Boolean)).size,
@@ -2048,9 +2102,9 @@ export default function App() {
     const b64 = thumb || await safePhotoToDisplayDataUrl(file);
     const savedDate = date || todayDateString();
     if (!b64) {
-      alert(isHeicLike(file)
+      notify(isHeicLike(file)
         ? `Could not convert ${file.name} from HEIC. Please try exporting it as JPG, or use the original photo file from your Photos app.`
-        : `Could not load ${file.name}. Please try exporting it as JPG or PNG.`);
+        : `Could not load ${file.name}. Please try exporting it as JPG or PNG.`, "error");
       return null;
     }
     const { data, error } = await supabase.from("locations").insert({
@@ -2066,7 +2120,7 @@ export default function App() {
       is_public: isPublic,
     }).select().single();
     if (error) {
-      alert(error.message);
+      notify(error.message, "error");
       return null;
     }
     const pin = { id: data.id, lat, lon, place: geo.display || "Unknown", city: geo.city, country: geo.country, date: savedDate, thumb: b64, fileName: file.name, isPublic };
@@ -2078,12 +2132,14 @@ export default function App() {
     if (isPublic) {
       setAllLocations(prev => [{ id: data.id, lat, lon, place: geo.display || "Unknown", thumb: b64, photo_url: b64, file_name: file.name }, ...prev]);
     }
+    notify(`${file.name} saved to your map`, "success");
     return pin;
-  }, [user]);
+  }, [user, notify]);
 
   const processFiles = useCallback(async (files) => {
     if (!user) return;
     setProcessing(true);
+    notify("Reading photo location data...", "info");
     await new Promise(resolve => setTimeout(resolve, 30));
     try {
       const imgs = Array.from(files).filter(isPhotoFile);
@@ -2104,17 +2160,20 @@ export default function App() {
         queued.push(...noGps.map(({ file, thumb }) => ({ file, thumb, fileName: file.name, suggestion, date: null, isPublic: false })));
       }
       if (queued.length > 0) setPendingPhotos(prev => [...prev, ...queued]);
-      if (imgs.length > 0 && queued.length === 0) alert("Could not load the selected image. For HEIC photos, try exporting as JPG or uploading the original photo file.");
-      if (imgs.length === 0) alert("No supported image files found.");
+      if (queued.length > 0) notify(`${queued.length} photo${queued.length === 1 ? "" : "s"} ready for location review`, "success");
+      if (imgs.length > 0 && queued.length === 0) notify("Could not load the selected image. For HEIC photos, try exporting as JPG or uploading the original photo file.", "error");
+      if (imgs.length === 0) notify("No supported image files found.", "error");
     } finally {
       setProcessing(false);
     }
-  }, [user, locateCurrentUser]);
+  }, [user, locateCurrentUser, notify]);
 
   const clearAll = async () => {
+    if (!window.confirm(`Remove all ${pins.length} photos from your map?`)) return;
     if (pins.length > 0) await supabase.from("locations").delete().in("id", pins.map(p => p.id));
     setPins([]); setSelectedPin(null); setCenter({ lat: 1.35, lon: 103.82 }); setZoom(3);
     setAllLocations(prev => prev.filter(location => !pins.some(pin => pin.id === location.id)));
+    notify("All photos removed from your map", "success");
   };
 
   const togglePopularPlaces = async () => {
@@ -2151,7 +2210,7 @@ export default function App() {
     const ok = window.confirm(`Delete ${pin.fileName || "this photo"} from your map?`);
     if (!ok) return;
     const { error } = await supabase.from("locations").delete().eq("id", pin.id).eq("user_id", user.id);
-    if (error) { alert(error.message); return; }
+    if (error) { notify(error.message, "error"); return; }
     setLightboxPin(current => current?.id === pin.id ? null : current);
     setSelectedPin(current => current === pin.id ? null : current);
     setPins(prev => {
@@ -2160,6 +2219,7 @@ export default function App() {
       return next;
     });
     setAllLocations(prev => prev.filter(location => location.id !== pin.id));
+    notify(`${pin.fileName || "Photo"} deleted`, "success");
   };
 
   const handleMapClick = useCallback(async (geo) => {
@@ -2173,15 +2233,16 @@ export default function App() {
     if (pendingPhotos.length === 0 || !navigator.geolocation) return;
     const location = await locateCurrentUser({ centerMap: true });
     if (!location) {
-      alert("Could not get your current location. Tap the map to place this photo.");
+      notify("Could not get your current location. Tap the map to place this photo.", "error");
       return;
     }
+    notify("Current location added for review", "success");
     setPendingPhotos(prev => {
       const [first, ...rest] = prev;
       if (!first) return prev;
       return [{ ...first, suggestion: location }, ...rest];
     });
-  }, [pendingPhotos, locateCurrentUser]);
+  }, [pendingPhotos, locateCurrentUser, notify]);
 
   const handleConfirmSuggestion = useCallback(async () => {
     if (pendingPhotos.length === 0) return;
@@ -2232,6 +2293,7 @@ export default function App() {
   return (
     <div style={{ width: "100%", minHeight: "100vh", fontFamily: "'DM Sans', sans-serif", background: "linear-gradient(145deg, #101827 0%, #17243A 42%, #22312C 100%)", color: palette.text, position: "relative", overflow: "hidden" }}>
       <Fonts />
+      <AppToast toast={toast} onClose={() => setToast(null)} />
 
       {/* Lightbox */}
       <Lightbox pin={lightboxPin} onClose={() => setLightboxPin(null)} onDelete={deletePin} />
@@ -2256,7 +2318,7 @@ export default function App() {
             <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800, color: palette.mint }}>{stats.countries}</div><div style={{ fontSize: 9, opacity: 0.5, letterSpacing: "1px" }}>COUNTRIES</div></div>
             <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800, color: palette.gold }}>{stats.cities}</div><div style={{ fontSize: 9, opacity: 0.5, letterSpacing: "1px" }}>CITIES</div></div>
             <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800, color: palette.sky }}>{pins.length}</div><div style={{ fontSize: 9, opacity: 0.5, letterSpacing: "1px" }}>PHOTOS</div></div>
-            <button onClick={clearAll} style={secondaryBtnStyle}>Clear All</button>
+            <button onClick={clearAll} title="Remove all photos from your map" style={secondaryBtnStyle}>Clear All</button>
           </>}
           {pins.length > 0 && isMobile && <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
             <div style={{ textAlign: "center" }}><div style={{ fontSize: 16, fontWeight: 800, color: palette.mint }}>{stats.countries}</div><div style={{ fontSize: 8, opacity: 0.5, letterSpacing: "1px" }}>CNTRS</div></div>
@@ -2265,7 +2327,7 @@ export default function App() {
 
           {/* User avatar & dropdown */}
           <div style={{ position: "relative", paddingLeft: pins.length > 0 ? 12 : 0, borderLeft: pins.length > 0 ? "1px solid rgba(255,255,255,0.1)" : "none" }}>
-            <div onClick={() => setShowUserMenu(!showUserMenu)} style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", padding: "5px 9px", borderRadius: 16, background: showUserMenu ? "rgba(255,255,255,0.09)" : "transparent", transition: "background 0.2s" }}>
+            <div role="button" tabIndex={0} aria-label="Open profile menu" onKeyDown={(e) => e.key === "Enter" && setShowUserMenu(!showUserMenu)} onClick={() => setShowUserMenu(!showUserMenu)} style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", padding: "5px 9px", borderRadius: 16, background: showUserMenu ? "rgba(255,255,255,0.09)" : "transparent", transition: "background 0.2s" }}>
               <div onClick={(e) => { e.stopPropagation(); setShowUserMenu(false); setShowProfilePreview(true); }} title="View profile picture" style={{
                 width: 36, height: 36, borderRadius: "50%", flexShrink: 0,
                 background: profile?.avatar_url ? `url(${profile.avatar_url}) center/cover` : `linear-gradient(135deg, ${palette.accent}, ${palette.sky})`,
@@ -2279,7 +2341,7 @@ export default function App() {
                 <div style={{ fontSize: 13, fontWeight: 600 }}>@{profile?.username}</div>
                 <div style={{ fontSize: 10, opacity: 0.4 }}>{user.email}</div>
               </div>
-              <span style={{ fontSize: 10, opacity: 0.4, marginLeft: 4 }}>▼</span>
+              <span aria-hidden="true" style={{ fontSize: 10, opacity: 0.4, marginLeft: 4 }}>▼</span>
             </div>
 
             {showUserMenu && (
