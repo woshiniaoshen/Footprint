@@ -210,7 +210,7 @@ const supabase = {
 
 const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "").split(",").map(email => email.trim().toLowerCase()).filter(Boolean);
-const APP_VERSION = "1.2.0";
+const APP_VERSION = "1.2.1";
 
 function formatCompactCount(value) {
   return new Intl.NumberFormat("en", {
@@ -1055,13 +1055,13 @@ function FriendsPanel({ currentUser, onClose }) {
           {loading ? <div style={{ color: palette.muted }}>Loading friends...</div> : acceptedFriends.length === 0 ? (
             <div style={{ color: palette.muted, padding: 18, borderRadius: 16, border: `1px solid ${palette.line}`, background: "rgba(255,255,255,0.05)" }}>No friends yet.</div>
           ) : (
-            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "minmax(260px, 0.8fr) minmax(0, 1.2fr)", gap: 14 }}>
-              <div style={{ display: "grid", gap: 10, alignContent: "start" }}>
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "minmax(0, 360px) minmax(0, 1fr)", gap: 14, alignItems: "start" }}>
+              <div style={{ display: "grid", gap: 10, alignContent: "start", minWidth: 0 }}>
                 {acceptedFriends.map(item => (
                   <FriendRow key={item.id} person={item.profile} actionLabel="Chat" active={selectedChat?.id === item.id} onAction={() => { setChatMessages([]); setSelectedChat(item); }} secondaryActionLabel="Remove" onSecondaryAction={() => removeFriend(item.id, item.profile.username)} dangerSecondary />
                 ))}
               </div>
-              <div style={{ minHeight: 280, border: `1px solid ${palette.line}`, borderRadius: 18, background: "rgba(255,255,255,0.045)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+              <div style={{ minHeight: 280, border: `1px solid ${palette.line}`, borderRadius: 18, background: "rgba(255,255,255,0.045)", display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
                 {selectedChat ? (
                   <>
                     <div style={{ padding: "12px 14px", borderBottom: `1px solid ${palette.line}`, fontWeight: 800 }}>Chat with @{selectedChat.profile.username}</div>
@@ -1076,9 +1076,9 @@ function FriendsPanel({ currentUser, onClose }) {
                         );
                       })}
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, padding: 12, borderTop: `1px solid ${palette.line}` }}>
-                      <input value={chatText} onChange={(e) => setChatText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendMessage()} placeholder="Write a message" style={inputStyle} />
-                      <button onClick={sendMessage} disabled={sending || !chatText.trim()} style={{ ...authBtnStyle, width: "auto", minWidth: 82, padding: "0 14px", opacity: sending || !chatText.trim() ? 0.55 : 1 }}>Send</button>
+                    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 8, padding: 12, borderTop: `1px solid ${palette.line}`, position: "relative", zIndex: 2 }}>
+                      <input value={chatText} onChange={(e) => setChatText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendMessage()} placeholder="Write a message" style={{ ...inputStyle, minWidth: 0 }} />
+                      <button type="button" onClick={sendMessage} disabled={sending || !chatText.trim()} style={{ ...authBtnStyle, width: "auto", minWidth: 82, padding: "0 14px", opacity: sending || !chatText.trim() ? 0.55 : 1, cursor: sending || !chatText.trim() ? "not-allowed" : "pointer", position: "relative", zIndex: 3 }}>Send</button>
                     </div>
                   </>
                 ) : (
@@ -1096,7 +1096,7 @@ function FriendsPanel({ currentUser, onClose }) {
 function FriendRow({ person, actionLabel, onAction, secondaryActionLabel, onSecondaryAction, danger = false, dangerSecondary = false, statusText = "", active = false }) {
   const isMobile = useIsMobile();
   return (
-    <div style={{ padding: 14, border: `1px solid ${active ? palette.mint : palette.line}`, borderRadius: 16, background: active ? "rgba(66,217,184,0.1)" : "rgba(255,255,255,0.055)", display: "flex", alignItems: "center", gap: 12, flexWrap: isMobile ? "wrap" : "nowrap" }}>
+    <div style={{ width: "100%", maxWidth: "100%", minWidth: 0, padding: 14, border: `1px solid ${active ? palette.mint : palette.line}`, borderRadius: 16, background: active ? "rgba(66,217,184,0.1)" : "rgba(255,255,255,0.055)", display: "flex", alignItems: "center", gap: 12, flexWrap: isMobile ? "wrap" : "nowrap", overflow: "hidden" }}>
       <div style={{
         width: 44, height: 44, borderRadius: "50%", flexShrink: 0,
         background: person.avatar_url ? `url(${person.avatar_url}) center/cover` : `linear-gradient(135deg, ${palette.accent}, ${palette.sky})`,
@@ -1105,13 +1105,13 @@ function FriendRow({ person, actionLabel, onAction, secondaryActionLabel, onSeco
         {!person.avatar_url && (person.username?.charAt(0).toUpperCase() || "?")}
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 800 }}>@{person.username}</div>
+        <div style={{ fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>@{person.username}</div>
         <div style={{ color: palette.muted, fontSize: 11, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{person.id}</div>
         {statusText && <div style={{ color: palette.gold, fontSize: 11, marginTop: 3 }}>{statusText}</div>}
       </div>
       <div style={{ display: "flex", gap: 8, width: isMobile ? "100%" : "auto", justifyContent: isMobile ? "flex-end" : "initial" }}>
-        {secondaryActionLabel && <button onClick={onSecondaryAction} style={{ ...(dangerSecondary ? dangerBtnStyle : secondaryBtnStyle), padding: "9px 11px", fontSize: 12, flexShrink: 0 }}>{secondaryActionLabel}</button>}
         <button onClick={onAction} style={{ ...(danger ? dangerBtnStyle : secondaryBtnStyle), padding: "9px 11px", fontSize: 12, flexShrink: 0 }}>{actionLabel}</button>
+        {secondaryActionLabel && <button onClick={onSecondaryAction} style={{ ...(dangerSecondary ? dangerBtnStyle : secondaryBtnStyle), padding: "9px 11px", fontSize: 12, flexShrink: 0 }}>{secondaryActionLabel}</button>}
       </div>
     </div>
   );
