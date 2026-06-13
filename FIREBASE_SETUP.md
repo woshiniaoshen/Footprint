@@ -51,7 +51,10 @@ service cloud.firestore {
   match /databases/{database}/documents {
     match /profiles/{userId} {
       allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.uid == userId;
+      allow create: if request.auth != null
+        && (request.auth.uid == userId || request.resource.data.user_id == request.auth.uid);
+      allow update, delete: if request.auth != null
+        && (request.auth.uid == userId || resource.data.user_id == request.auth.uid);
     }
 
     match /locations/{locationId} {

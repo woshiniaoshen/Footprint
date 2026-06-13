@@ -210,7 +210,7 @@ const supabase = {
 
 const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "").split(",").map(email => email.trim().toLowerCase()).filter(Boolean);
-const APP_VERSION = "1.1.8";
+const APP_VERSION = "1.1.9";
 
 function formatCompactCount(value) {
   return new Intl.NumberFormat("en", {
@@ -1243,8 +1243,9 @@ function UsernameSetup({ user, onComplete }) {
     if (username.length < 3) { setError("Username must be at least 3 characters"); return; }
     if (error) return;
     setLoading(true);
+    const userId = user.id || user.uid;
     const { error: insertErr } = await supabase.from("profiles").insert({
-      id: user.id, username, avatar_url: avatar,
+      id: userId, user_id: userId, email: user.email || "", username, avatar_url: avatar,
     });
     if (insertErr) {
       if (insertErr.message.includes("unique") || insertErr.message.includes("duplicate")) setError("Username is already taken");
@@ -1388,7 +1389,7 @@ function EditProfile({ profile, onSave, onClose }) {
     if (error) return;
     setLoading(true);
     const { error: updateErr } = await supabase.from("profiles").update({
-      username, avatar_url: avatar,
+      username, avatar_url: avatar, user_id: profile.id,
     }).eq("id", profile.id);
 
     if (updateErr) {
@@ -2095,7 +2096,7 @@ export default function App() {
 
   if (!user) return <AuthScreen onAuth={setUser} />;
   if (needsPasswordReset) return <PasswordResetScreen resetCode={passwordResetCode} onComplete={() => { setNeedsPasswordReset(false); setPasswordResetCode(""); }} />;
-  if (needsUsername) return <UsernameSetup user={user} onComplete={(p) => { setProfile({ id: user.id, ...p }); setNeedsUsername(false); }} />;
+  if (needsUsername) return <UsernameSetup user={user} onComplete={(p) => { setProfile({ id: user.id || user.uid, ...p }); setNeedsUsername(false); }} />;
 
   return (
     <div style={{ width: "100%", minHeight: "100vh", fontFamily: "'DM Sans', sans-serif", background: "linear-gradient(145deg, #101827 0%, #17243A 42%, #22312C 100%)", color: palette.text, position: "relative", overflow: "hidden" }}>
