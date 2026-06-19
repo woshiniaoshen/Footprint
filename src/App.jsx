@@ -210,7 +210,7 @@ const supabase = {
 
 const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "").split(",").map(email => email.trim().toLowerCase()).filter(Boolean);
-const APP_VERSION = "1.3.0";
+const APP_VERSION = "1.4.0";
 
 function formatCompactCount(value) {
   return new Intl.NumberFormat("en", {
@@ -225,6 +225,30 @@ function todayDateString() {
 
 function friendDocId(a, b) {
   return [a, b].sort().join("_");
+}
+
+async function fetchSocialSummary(userId) {
+  const { data: friendships, error } = await supabase.from("friends").select("*").contains("user_ids", userId);
+  if (error) return { friendships: [], profilesById: new Map(), messages: [], requestCount: 0, unreadCount: 0, error };
+
+  const rows = friendships || [];
+  const friendIds = [...new Set(rows.map(row => row.user_ids?.find(id => id !== userId)).filter(Boolean))];
+  const { data: profiles } = friendIds.length
+    ? await supabase.from("profiles").select("*").in("id", friendIds)
+    : { data: [] };
+  const profilesById = new Map((profiles || []).map(person => [person.id, person]));
+  const { data: messages } = await supabase.from("messages").select("*").contains("user_ids", userId).order("created_at", { ascending: true });
+  const friendshipsById = new Map(rows.map(row => [row.id, row]));
+  const requestCount = rows.filter(row => row.status === "pending" && row.friend_id === userId).length;
+  const unreadCount = (messages || []).filter(item => {
+    if (item.sender_id === userId) return false;
+    const friendship = friendshipsById.get(item.friendship_id);
+    if (!friendship || friendship.status !== "accepted") return false;
+    const lastRead = friendship.last_read?.[userId] || friendship.accepted_at || "";
+    return String(item.created_at || "") > String(lastRead);
+  }).length;
+
+  return { friendships: rows, profilesById, messages: messages || [], requestCount, unreadCount, error: null };
 }
 
 function useIsMobile() {
@@ -833,7 +857,7 @@ function AdminPanel({ currentUser, onClose }) {
   );
 }
 
-function FriendsPanel({ currentUser, onClose }) {
+function FriendsPanel({ currentUser, onClose, onSocialChange }) {
   const isMobile = useIsMobile();
   const currentUserId = currentUser.id || currentUser.uid;
   const [friendships, setFriendships] = useState([]);
@@ -943,6 +967,7 @@ function FriendsPanel({ currentUser, onClose }) {
     setSearch("");
     setMessage(`Friend request sent to @${person.username}`);
     loadFriends();
+    onSocialChange?.();
   };
 
   const acceptRequest = async (friendship) => {
@@ -950,6 +975,7 @@ function FriendsPanel({ currentUser, onClose }) {
     if (error) { setMessage(error.message); return; }
     setMessage(`You are now friends with @${friendship.profile.username}`);
     loadFriends();
+    onSocialChange?.();
   };
 
   const declineRequest = async (friendship) => {
@@ -957,6 +983,7 @@ function FriendsPanel({ currentUser, onClose }) {
     if (error) { setMessage(error.message); return; }
     setMessage(`Declined @${friendship.profile.username}`);
     loadFriends();
+    onSocialChange?.();
   };
 
   const removeFriend = async (friendshipId, username) => {
@@ -970,6 +997,18 @@ function FriendsPanel({ currentUser, onClose }) {
       setChatMessages([]);
     }
     setMessage(`Removed @${username}`);
+    onSocialChange?.();
+  };
+
+  const openChat = async (friendship) => {
+    setChatMessages([]);
+    setSelectedChat(friendship);
+    const lastRead = { ...(friendship.last_read || {}), [currentUserId]: new Date().toISOString() };
+    const { error } = await supabase.from("friends").update({ last_read: lastRead }).eq("id", friendship.id);
+    if (!error) {
+      setFriendships(prev => prev.map(item => item.id === friendship.id ? { ...item, last_read: lastRead } : item));
+      onSocialChange?.();
+    }
   };
 
   const sendMessage = async () => {
@@ -1058,7 +1097,7 @@ function FriendsPanel({ currentUser, onClose }) {
             <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "minmax(0, 360px) minmax(0, 1fr)", gap: 14, alignItems: "start" }}>
               <div style={{ display: "grid", gap: 10, alignContent: "start", minWidth: 0 }}>
                 {acceptedFriends.map(item => (
-                  <FriendRow key={item.id} person={item.profile} actionLabel="Chat" active={selectedChat?.id === item.id} onAction={() => { setChatMessages([]); setSelectedChat(item); }} secondaryActionLabel="Remove" onSecondaryAction={() => removeFriend(item.id, item.profile.username)} dangerSecondary />
+                  <FriendRow key={item.id} person={item.profile} actionLabel="Chat" active={selectedChat?.id === item.id} onAction={() => openChat(item)} secondaryActionLabel="Remove" onSecondaryAction={() => removeFriend(item.id, item.profile.username)} dangerSecondary />
                 ))}
               </div>
               <div style={{ minHeight: 280, border: `1px solid ${palette.line}`, borderRadius: 18, background: "rgba(255,255,255,0.045)", display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
@@ -1089,6 +1128,131 @@ function FriendsPanel({ currentUser, onClose }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function ActivityPanel({ currentUser, onClose, onOpenFriends, onPhotoClick }) {
+  const isMobile = useIsMobile();
+  const userId = currentUser.id || currentUser.uid;
+  const [social, setSocial] = useState({ friendships: [], profilesById: new Map(), messages: [], requestCount: 0, unreadCount: 0 });
+  const [uploads, setUploads] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const loadActivity = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    const summary = await fetchSocialSummary(userId);
+    if (summary.error) {
+      setError(summary.error.message);
+      setLoading(false);
+      return;
+    }
+    setSocial(summary);
+    const acceptedIds = new Set(summary.friendships
+      .filter(item => item.status === "accepted")
+      .map(item => item.user_ids?.find(id => id !== userId))
+      .filter(Boolean));
+    const { data, error: uploadError } = await supabase.from("locations").select("*").eq("is_public", true).order("created_at", { ascending: false });
+    if (uploadError) setError(uploadError.message);
+    const friendUploads = (data || []).filter(item => acceptedIds.has(item.user_id)).slice(0, 30);
+    setUploads(await Promise.all(friendUploads.map(async item => ({
+      ...item,
+      profile: summary.profilesById.get(item.user_id),
+      thumb: await displayablePhotoUrl(item.photo_url || null, item.file_name || ""),
+    }))));
+    setLoading(false);
+  }, [userId]);
+
+  useEffect(() => {
+    const id = window.setTimeout(() => loadActivity(), 0);
+    return () => window.clearTimeout(id);
+  }, [loadActivity]);
+
+  const incoming = social.friendships.filter(item => item.status === "pending" && item.friend_id === userId);
+  const unreadByFriend = new Map();
+  for (const item of social.messages) {
+    if (item.sender_id === userId) continue;
+    const friendship = social.friendships.find(row => row.id === item.friendship_id);
+    if (!friendship || friendship.status !== "accepted") continue;
+    const lastRead = friendship.last_read?.[userId] || friendship.accepted_at || "";
+    if (String(item.created_at || "") <= String(lastRead)) continue;
+    unreadByFriend.set(item.sender_id, (unreadByFriend.get(item.sender_id) || 0) + 1);
+  }
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 970, background: "rgba(6,10,18,0.76)", display: "flex", alignItems: isMobile ? "stretch" : "center", justifyContent: "center", padding: isMobile ? 0 : 24, backdropFilter: "blur(12px)" }}>
+      <div onClick={(event) => event.stopPropagation()} style={{ width: isMobile ? "100vw" : "min(820px, calc(100vw - 32px))", height: isMobile ? "100dvh" : "min(760px, calc(100vh - 48px))", background: "rgba(17,24,39,0.97)", border: `1px solid ${palette.line}`, borderRadius: isMobile ? 0 : 24, overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 28px 90px rgba(0,0,0,0.46)" }}>
+        <div style={{ padding: isMobile ? "16px 18px" : "22px 24px", borderBottom: `1px solid ${palette.line}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16 }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 22 }}>Activity</h2>
+            <div style={{ marginTop: 4, color: palette.muted, fontSize: 12 }}>Updates from your friends</div>
+          </div>
+          <button onClick={onClose} style={{ ...secondaryBtnStyle, padding: "10px 14px" }}>Close</button>
+        </div>
+
+        <div style={{ overflowY: "auto", padding: isMobile ? 16 : 24 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12, marginBottom: 20 }}>
+            <button onClick={onOpenFriends} style={{ ...secondaryBtnStyle, textAlign: "left", padding: 16 }}>
+              <div style={{ color: palette.gold, fontSize: 22, fontWeight: 900 }}>{social.requestCount}</div>
+              <div style={{ marginTop: 4 }}>Friend requests</div>
+            </button>
+            <button onClick={onOpenFriends} style={{ ...secondaryBtnStyle, textAlign: "left", padding: 16 }}>
+              <div style={{ color: palette.mint, fontSize: 22, fontWeight: 900 }}>{social.unreadCount}</div>
+              <div style={{ marginTop: 4 }}>Unread messages</div>
+            </button>
+          </div>
+
+          {error && <div role="alert" style={{ marginBottom: 16, padding: "10px 12px", borderRadius: 12, color: "#FFB19F", background: "rgba(230,57,70,0.1)", border: "1px solid rgba(230,57,70,0.3)", fontSize: 12 }}>{error}</div>}
+          {loading ? <div style={{ color: palette.muted }}>Loading activity...</div> : (
+            <>
+              {(incoming.length > 0 || unreadByFriend.size > 0) && (
+                <section style={{ marginBottom: 24 }}>
+                  <h3 style={{ margin: "0 0 10px", fontSize: 14 }}>Notifications</h3>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {incoming.map(item => {
+                      const person = social.profilesById.get(item.requester_id);
+                      return <ActivityNotice key={item.id} person={person} text="sent you a friend request" />;
+                    })}
+                    {[...unreadByFriend.entries()].map(([friendId, count]) => (
+                      <ActivityNotice key={friendId} person={social.profilesById.get(friendId)} text={`sent ${count} unread message${count === 1 ? "" : "s"}`} />
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              <section>
+                <h3 style={{ margin: "0 0 10px", fontSize: 14 }}>Friend Activity</h3>
+                {uploads.length === 0 ? (
+                  <div style={{ color: palette.muted, padding: 18, borderRadius: 14, border: `1px solid ${palette.line}`, background: "rgba(255,255,255,0.045)" }}>No public friend uploads yet.</div>
+                ) : (
+                  <div style={{ display: "grid", gap: 10 }}>
+                    {uploads.map(item => (
+                      <button key={item.id} onClick={() => item.thumb && onPhotoClick({ id: item.id, thumb: item.thumb, place: item.place, date: item.date, fileName: item.file_name })} style={{ width: "100%", padding: 12, borderRadius: 14, border: `1px solid ${palette.line}`, background: "rgba(255,255,255,0.05)", color: palette.text, display: "grid", gridTemplateColumns: "52px minmax(0, 1fr)", gap: 12, alignItems: "center", textAlign: "left", cursor: item.thumb ? "zoom-in" : "default", fontFamily: "'DM Sans', sans-serif" }}>
+                        <div style={{ width: 52, height: 52, borderRadius: 10, overflow: "hidden", background: "rgba(255,255,255,0.08)" }}>{item.thumb && <img src={item.thumb} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />}</div>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 800 }}>@{item.profile?.username || "friend"} visited {item.place || "a new place"}</div>
+                          <div style={{ color: palette.muted, fontSize: 11, marginTop: 4 }}>{item.date || (item.created_at ? new Date(item.created_at).toLocaleDateString() : "Recently")}</div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </section>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ActivityNotice({ person, text }) {
+  return (
+    <div style={{ padding: 12, borderRadius: 14, border: `1px solid ${palette.line}`, background: "rgba(255,255,255,0.05)", display: "flex", gap: 10, alignItems: "center" }}>
+      <div style={{ width: 38, height: 38, borderRadius: "50%", flexShrink: 0, background: person?.avatar_url ? `url(${person.avatar_url}) center/cover` : `linear-gradient(135deg, ${palette.accent}, ${palette.sky})`, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800 }}>{!person?.avatar_url && (person?.username?.charAt(0).toUpperCase() || "?")}</div>
+      <div style={{ minWidth: 0, fontSize: 13 }}><strong>@{person?.username || "friend"}</strong> {text}</div>
     </div>
   );
 }
@@ -1937,6 +2101,8 @@ export default function App() {
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [showFriendsPanel, setShowFriendsPanel] = useState(false);
+  const [showActivityPanel, setShowActivityPanel] = useState(false);
+  const [socialNotifications, setSocialNotifications] = useState({ requests: 0, unread: 0 });
   const [showProfilePreview, setShowProfilePreview] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [lightboxPin, setLightboxPin] = useState(null);
@@ -1977,6 +2143,27 @@ export default function App() {
   const activeHeatLabel = heatmapScope === "own" ? "your place groups" : "global place groups";
   const globalUploadDisplayCount = allLocations.length * 100000;
   const isAdmin = profile?.role === "admin" || ADMIN_EMAILS.includes(user?.email?.toLowerCase() || "");
+  const socialNotificationTotal = socialNotifications.requests + socialNotifications.unread;
+
+  const refreshSocialNotifications = useCallback(async () => {
+    const userId = user?.id || user?.uid;
+    if (!userId) {
+      setSocialNotifications({ requests: 0, unread: 0 });
+      return;
+    }
+    const summary = await fetchSocialSummary(userId);
+    if (!summary.error) setSocialNotifications({ requests: summary.requestCount, unread: summary.unreadCount });
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || needsUsername) return undefined;
+    const firstLoad = window.setTimeout(() => refreshSocialNotifications(), 0);
+    const intervalId = window.setInterval(refreshSocialNotifications, 15000);
+    return () => {
+      window.clearTimeout(firstLoad);
+      window.clearInterval(intervalId);
+    };
+  }, [user, needsUsername, refreshSocialNotifications]);
 
   const locateCurrentUser = useCallback(async ({ centerMap = false, timeout = 8000 } = {}) => {
     if (!navigator.geolocation) return null;
@@ -2304,7 +2491,8 @@ export default function App() {
       {/* Edit Profile */}
       {showEditProfile && profile && <EditProfile profile={profile} onSave={(p) => { setProfile(p); setShowEditProfile(false); }} onClose={() => setShowEditProfile(false)} />}
       {showAdminPanel && isAdmin && <AdminPanel currentUser={user} onClose={() => setShowAdminPanel(false)} />}
-      {showFriendsPanel && <FriendsPanel currentUser={user} onClose={() => setShowFriendsPanel(false)} />}
+      {showFriendsPanel && <FriendsPanel currentUser={user} onSocialChange={refreshSocialNotifications} onClose={() => { setShowFriendsPanel(false); refreshSocialNotifications(); }} />}
+      {showActivityPanel && <ActivityPanel currentUser={user} onClose={() => { setShowActivityPanel(false); refreshSocialNotifications(); }} onOpenFriends={() => { setShowActivityPanel(false); setShowFriendsPanel(true); }} onPhotoClick={(pin) => { setShowActivityPanel(false); setPublicSamplePin(pin); }} />}
 
       {/* Header */}
       <header style={{ padding: isMobile ? "10px 16px" : "14px 28px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "relative", zIndex: 10, borderBottom: `1px solid ${palette.line}`, background: "rgba(17,24,39,0.72)", backdropFilter: "blur(18px)" }}>
@@ -2334,8 +2522,10 @@ export default function App() {
                 display: "flex", alignItems: "center", justifyContent: "center",
                 fontSize: 15, fontWeight: 800, color: "white", border: "2px solid rgba(255,255,255,0.22)",
                 boxShadow: "0 0 0 3px rgba(66,217,184,0.12)", cursor: "zoom-in",
+                position: "relative",
               }}>
                 {!profile?.avatar_url && (profile?.username?.charAt(0).toUpperCase() || "?")}
+                {socialNotificationTotal > 0 && <span aria-label={`${socialNotificationTotal} notifications`} style={{ position: "absolute", top: -5, right: -5, minWidth: 18, height: 18, padding: "0 5px", borderRadius: 9, background: palette.accent, color: "white", border: "2px solid #111827", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 900 }}>{socialNotificationTotal > 99 ? "99+" : socialNotificationTotal}</span>}
               </div>
               <div style={{ display: isMobile ? "none" : "block" }}>
                 <div style={{ fontSize: 13, fontWeight: 600 }}>@{profile?.username}</div>
@@ -2364,6 +2554,10 @@ export default function App() {
                 </button>
                 <button onClick={() => { setShowFriendsPanel(true); setShowUserMenu(false); }} style={menuItemStyle}>
                   <span>+</span> Friends
+                </button>
+                <button onClick={() => { setShowActivityPanel(true); setShowUserMenu(false); }} style={{ ...menuItemStyle, justifyContent: "space-between" }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: 10 }}><span>●</span> Activity</span>
+                  {socialNotificationTotal > 0 && <span style={{ minWidth: 22, height: 20, padding: "0 6px", borderRadius: 10, background: palette.accent, color: "white", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 900 }}>{socialNotificationTotal > 99 ? "99+" : socialNotificationTotal}</span>}
                 </button>
                 <button onClick={() => { setShowTutorial(true); setShowUserMenu(false); }} style={menuItemStyle}>
                   <span>?</span> Tutorial
