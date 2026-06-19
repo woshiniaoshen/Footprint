@@ -1,16 +1,28 @@
-# React + Vite
+# Nelson Tan Portfolio and Footprint
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+This repository builds two pages in one Vite deployment:
 
-Currently, two official plugins are available:
+- `/` - Nelson Tan's cybersecurity and project portfolio
+- `/footprint/` - the Footprint travel mapping application
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Local development
 
-## React Compiler
+```bash
+npm install
+npm run dev
+```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Open:
 
-## Expanding the ESLint configuration
+- `http://127.0.0.1:5173/`
+- `http://127.0.0.1:5173/footprint/`
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Production build
+
+```bash
+npm run build
+```
+
+Vite writes both entry pages to `dist/`. The existing Cloudflare deployment can serve the portfolio and Footprint from the same custom domain.
+
+Firebase password reset links return users to `/footprint/`.

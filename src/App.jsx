@@ -210,7 +210,7 @@ const supabase = {
 
 const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "").split(",").map(email => email.trim().toLowerCase()).filter(Boolean);
-const APP_VERSION = "1.4.0";
+const APP_VERSION = "1.5.0";
 
 function formatCompactCount(value) {
   return new Intl.NumberFormat("en", {
@@ -1352,7 +1352,7 @@ function AuthScreen({ onAuth }) {
     if (!email) { setError("Enter your email address first"); return; }
     setLoading(true);
     const { error: e } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: window.location.origin,
+      redirectTo: `${window.location.origin}/footprint/`,
     });
     if (e) setError(e.message);
     else setResetSent(true);
