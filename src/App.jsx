@@ -210,7 +210,7 @@ const supabase = {
 
 const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "").split(",").map(email => email.trim().toLowerCase()).filter(Boolean);
-const APP_VERSION = "1.5.0";
+const APP_VERSION = "1.5.1";
 
 function formatCompactCount(value) {
   return new Intl.NumberFormat("en", {

@@ -114,6 +114,11 @@ export default function Portfolio() {
               <strong>Singapore Management University</strong>
               <p>BSc Computer Science · Cybersecurity track</p>
             </div>
+            <div>
+              <span>Education</span>
+              <strong>Nanyang Polytechnic</strong>
+              <p>Diploma in Infocomm &amp; Media Engineering · Cloud and Infrastructure Services</p>
+            </div>
           </div>
         </div>
         <div className="skill-list" aria-label="Skills">
