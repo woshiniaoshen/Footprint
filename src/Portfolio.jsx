@@ -7,6 +7,9 @@ const skills = [
   "JavaScript",
   "Python",
   "Java",
+  "C#",
+  "PHP",
+  "MySQL",
   "Docker",
   "AWS",
   "Networking",
@@ -17,9 +20,13 @@ export default function Portfolio() {
   return (
     <main className="portfolio-shell">
       <header className="portfolio-nav">
-        <a className="portfolio-name" href="#top" aria-label="Nelson Tan home">NT</a>
+        <a className="portfolio-name" href="#top" aria-label="Nelson Tan home">
+          <span>NT</span>
+          <strong>Nelson Tan</strong>
+        </a>
         <nav aria-label="Main navigation">
           <a href="#work">Work</a>
+          <a href="#values">Values</a>
           <a href="#about">About</a>
           <a href="https://github.com/woshiniaoshen" target="_blank" rel="noreferrer">GitHub</a>
           <a href="https://www.linkedin.com/in/nelson-tan-b58170206/" target="_blank" rel="noreferrer">LinkedIn</a>
@@ -42,9 +49,16 @@ export default function Portfolio() {
             <a className="text-link" href="https://github.com/woshiniaoshen" target="_blank" rel="noreferrer">Explore GitHub</a>
           </div>
         </div>
-        <div className="hero-signal" aria-label="Current focus">
-          <span>Current focus</span>
-          <strong>Understanding attacks to build stronger defenses.</strong>
+        <div className="hero-facts" aria-label="Profile highlights">
+          <div className="hero-signal">
+            <span>Current focus</span>
+            <strong>Understanding attacks to build stronger defenses.</strong>
+          </div>
+          <dl>
+            <div><dt>Based in</dt><dd>Singapore</dd></div>
+            <div><dt>Studying</dt><dd>Computer Science at SMU</dd></div>
+            <div><dt>Track</dt><dd>Cybersecurity</dd></div>
+          </dl>
         </div>
       </section>
 
@@ -78,11 +92,59 @@ export default function Portfolio() {
           </div>
         </article>
 
+        <article className="project-feature project-feature-secondary">
+          <a className="project-visual" href="/projects/hardware-store/" aria-label="Open the hardware store demo">
+            <img src="/hardware-store-preview.png" alt="Yong Huat Hardware academic website" />
+          </a>
+          <div className="project-copy">
+            <p className="project-number">02 Â· Polytechnic project</p>
+            <h3>Hardware Store</h3>
+            <p>
+              A responsive PHP and MySQL e-commerce coursework project with product browsing,
+              account flows, search, sessions, and profile-image uploads.
+            </p>
+            <ul>
+              <li>PHP and MySQL backend</li>
+              <li>Responsive HTML, CSS, and JavaScript</li>
+              <li>Product catalogue and account workflows</li>
+              <li>Safe read-only portfolio demonstration</li>
+            </ul>
+            <div className="project-actions">
+              <a className="primary-link" href="/projects/hardware-store/">Try the demo</a>
+              <a className="text-link" href="https://github.com/woshiniaoshen/Poly-php-project" target="_blank" rel="noreferrer">Source code</a>
+            </div>
+          </div>
+        </article>
+
         <a className="github-band" href="https://github.com/woshiniaoshen" target="_blank" rel="noreferrer">
           <span>More experiments and coursework</span>
           <strong>Browse all projects on GitHub</strong>
           <span aria-hidden="true">↗</span>
         </a>
+      </section>
+
+      <section className="portfolio-values" id="values">
+        <div className="section-heading">
+          <p>How I work</p>
+          <h2>Reliable thinking under real constraints</h2>
+        </div>
+        <div className="value-grid">
+          <article>
+            <span>01</span>
+            <h3>Problem solving</h3>
+            <p>I break complex technical issues into smaller, testable steps and keep working until the underlying cause is clear.</p>
+          </article>
+          <article>
+            <span>02</span>
+            <h3>Ethical security</h3>
+            <p>I believe effective cybersecurity starts with responsible conduct, clear rules, and respect for people and their boundaries.</p>
+          </article>
+          <article>
+            <span>03</span>
+            <h3>Team contribution</h3>
+            <p>I communicate openly, support shared goals, and value the different strengths that each person brings to a team.</p>
+          </article>
+        </div>
       </section>
 
       <section className="portfolio-about" id="about">

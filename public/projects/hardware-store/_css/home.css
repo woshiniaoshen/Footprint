@@ -1,0 +1,397 @@
+#main-con{
+    max-width: 1140px;
+    margin: 0 auto;
+    padding-top: 20px;
+}
+#banner{
+    background-image: url(../images/bannercomputer.png);
+    background-repeat:no-repeat;
+    background-position: top;   
+    /* width: 1140px;
+    height: 373px; */
+    width: 100%;
+    height: 373px;
+    text-align: center;
+    font-family: raleway;
+    color: #ffffff;
+}
+
+#cant{
+    font-weight: bold;
+    font-size: 19pt;
+    padding-top: 110px;
+}
+
+#we{
+    font-size: 30pt;
+    font-family: ralewaybold;
+    padding-top: 20px;
+}
+
+#banner div a{
+    display: block;
+    text-decoration: none;
+    margin: 0 auto;
+    width: 100px;
+    background-color: #ff6634;
+    padding:20px 30px;
+    border-radius: 60px;
+    color: white;
+    font-family: ralewaybold;
+    font-size: 13pt;
+
+}
+
+#banner div{
+    margin-top: 10px;
+    font-size: 14pt;
+    font-weight: bolder;
+}
+#infocon{
+    display: flex;
+    flex-direction: column;
+    margin-top: 30px;
+    
+}
+#infocon div a{
+    text-decoration: none;
+}
+#info1{
+    display: flex;
+    
+}
+
+#info2{
+    display: flex;
+    margin-top: 60px;
+}
+
+
+#general{
+    background-image: url(../images/home_general2.jpg);
+    background-repeat:no-repeat;
+    background-position: center;   
+    width: 540px;
+    height: 270px;
+    font-family: myriadpro;
+
+}
+
+
+
+#paint{
+    background-image: url(../images/home_paint1.jpg);
+    background-repeat:no-repeat;
+    background-position: center;   
+    width: 540px;
+    height: 270px;
+    margin-left: 58px;
+}
+
+
+
+#houseware{
+    background-image: url(../images/home_houseware1.jpg);
+    background-repeat:no-repeat;
+    background-position: center;   
+    width: 540px;
+    height: 270px;
+}
+
+
+#reg{
+    background-image: url(../images/home_handtool2.jpg);
+    background-repeat:no-repeat;
+    background-position: center;   
+    width: 540px;
+    height: 270px;
+    margin-left: 58px;
+}
+
+.q p{
+    margin-top: 100px;
+    padding: 20px 20px;
+    background-color: #ff6634;
+    font-size: 23pt;
+    color: white;
+}
+
+#infocon2{
+    display: flex;
+    margin-top: 150px;
+    width: 100%;
+}
+
+#con1{
+    display: flex;
+}
+
+#con2{
+    display: flex;
+}
+
+.icons{
+    display: flex;
+    padding: 30px 27px;
+    border: solid 1px #cccccc;
+}
+
+.icons img{
+    height: 70px;
+    width: 70px;
+    
+}
+
+
+.icons b{
+    font-family: ralewaybold;
+    font-size: 12pt;
+
+}
+
+.icons p{
+    font-family: myriadpro;
+    font-size: 12pt;
+    padding-top: 10px;
+}
+
+.icons div{
+    margin-left: 9.6px;
+}
+
+#payment{
+    padding-top: 10px;
+}
+
+#payment img{
+    width: 36px;
+    height: 23px;
+    padding-left: 6.3px;
+}
+
+#text2{
+    display: none;
+}
+@media screen and (max-width:1100px){
+    .icons{
+        padding: 15px 2px;
+    }
+} 
+@media screen and (max-width:768px){
+    #banner{
+        background-image: url(../images/BANNERTABLET.png);
+        margin: 0 auto;
+    }
+    #info2{
+        margin-top: 30px;
+    }
+
+    #paint{
+        margin-left: 30px;
+    }
+
+    #reg{
+        margin-left: 30px;
+    }
+
+    
+
+    .q p{
+        font-size: 15pt;
+    }
+
+    #infocon2{
+        display: flex;
+        margin-top: 100px;
+        flex-direction: column;
+        
+    }
+    #icon1 p{
+        margin-right: 9%;
+        padding-right: 9px;
+    }
+
+    .icons b{
+        font-size: 11pt;
+        font-family: ralewaybold;
+    }
+
+    .icons p{
+        font-size: 10pt;
+        
+    }
+
+    #icon2 p{
+        margin-right: 5px;
+    }
+
+    .icons{
+        display: flex;
+        padding: 30px 0;
+        border: solid 1px #cccccc; 
+        width: 375px;
+        
+    }
+
+    #we{
+        font-weight: bolder;
+        font-size: 32pt;
+    }
+
+    
+} 
+
+@media screen and (max-width:480px){
+
+    body{
+        max-width: 480px;
+    }
+
+    #banner{
+        background-image: url(../images/bannerphone.png);
+        background-repeat:no-repeat;
+        margin-top: -5px;
+        width: 95%;
+        margin: 0 auto;  
+        background-position: center;
+    }
+
+    #cant{
+        font-weight: bold;
+        font-size: 13.5pt;
+        padding-top: 90px;
+    }
+
+    #we{
+        font-size: 25pt;
+        margin-bottom: 15px;
+    }
+
+
+    #banner div a{
+        
+        display: block;
+        text-decoration: none;
+        margin: 0 auto;
+        width: 420px;
+        background-color: #ff6634;
+        padding:10px 0px;
+        border-radius: 60px;
+        color: white;
+        font-size: 20pt;
+    }
+
+    #general{
+        background-image: url(../images/General-phone.png);
+        background-repeat:no-repeat;
+        background-position: center;   
+        font-family: myriadpro;
+        margin: 0px;
+        height: 180px;
+        width: 480px;
+    }
+    
+    #paint{
+        background-image: url(../images/paint-phone.png);
+        background-repeat:no-repeat;
+        background-position: center; 
+        margin: 0px;
+        height: 180px;
+        width: 480px;
+    }
+
+    #houseware{
+        background-image: url(../images/houseware-phone.png);
+        background-repeat:no-repeat;
+        background-position: center;
+        margin: 0px;
+        height: 180px;
+        width: 480px;
+    }
+    
+    #reg{
+        background-image: url(../images/register-phone.png);
+        background-repeat:no-repeat;
+        background-position: center;   
+        margin: 0px;
+        height: 180px;
+        width: 480px;
+    }
+
+    .q p{
+        
+        padding: 20px 100px;
+        background-color: #ff6634;
+        font-size:15pt;
+        color: white;
+        width: 100px;
+        margin: 0 auto;
+        margin-top: 50px;
+    }
+
+    #infocon{
+        flex-direction: column;
+        margin: 0 auto;
+        justify-content: center;
+    }
+
+    #info1{
+        display: flex;
+        flex-direction: column;
+    }
+    
+    #info2{
+        display: flex;
+        flex-direction: column;
+
+
+    }
+
+    #infocon2{
+        flex-direction: column;
+        margin-top: -5px;
+    }
+    
+    #con1{
+        flex-direction: column;
+    }
+    
+    #con2{
+        flex-direction: column;
+    }
+
+    .icons{
+        width: 478px;
+    
+    }
+
+    .icons img{
+        margin-left: 15%;
+    }
+    .icons b{
+        font-size: 15pt;
+       font-family: ralewaybold;;
+    }
+    .icons p{
+        font-size: 12pt;
+    }
+    #payment{
+        display: flex;
+        margin-left: -20px;
+    }
+
+    #payment img{
+        width: 36px;
+        height: 23px;
+        padding-left: 0px;
+    }
+    #text1{
+        display: none;
+    }
+
+    #text2{
+        display: flex;
+    }
+
+
+} 

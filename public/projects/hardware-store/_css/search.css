@@ -1,0 +1,40 @@
+#sr{
+   text-align: center;
+}
+
+#head1{
+    font-size: 30pt;
+    font-family: ralewaybold;
+    margin: 20px 0px;
+}
+
+#sr2{
+    font-size: 20pt;
+    font-family: raleway;
+    font-weight: bold;
+    margin: 15px 0px;
+}
+
+#sr3 input{
+    height: 50px;
+    width: 500px;
+}
+
+input[type=submit]{
+    width: 300px;
+    font-size: 21pt;
+    font-family: myriadpro;
+    font-weight: bolder;
+    text-align: center;
+    color: white;
+    background-color: #ff6634;
+    margin: 20px 0px;
+
+}
+
+@media screen and (max-width:550px){
+    #sr3 input{
+        height: 50px;
+        width: 380px;
+    }
+}

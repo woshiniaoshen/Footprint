@@ -1,0 +1,160 @@
+#abanner{
+    background-image: url(../images/aboutusbanner.jpg);
+    background-repeat:no-repeat;
+    background-position: top;
+    width: 100%;
+    height: 500px;   
+    text-align: center;
+    color: white;
+}
+
+#weare{
+    font-family: ralewaybold;
+    font-size: 60pt;
+    padding-top: 120px;
+}
+
+#now{
+    font-family: raleway;
+    font-size: 18pt;
+    padding-top: 25px;
+
+}
+
+#midcont{
+    max-width: 98%;
+    margin: 0 auto;
+    
+}
+
+#abt1{
+    font-family: ralewaybold;
+    font-size: 25pt;
+    margin-bottom: 10px;
+    margin-top: 20px;
+
+}
+
+#yh{
+    font-family: ralewaybold;
+    font-size: 40pt;
+    margin-bottom: 15px;
+
+}
+
+.txt{
+    font-family: raleway;
+    font-size: 18pt;
+    margin-bottom: 20px;
+}
+
+#abtcont{
+    display: flex;
+    flex-direction: row;
+    justify-content: space-evenly;
+    margin-bottom: 20px;
+}
+
+.title{
+    font-family: raleway;
+    font-weight: bold;
+    font-size: 18pt;
+    margin: 5px 0px;
+    text-align: center;
+}
+
+.txt2{
+    font-family: raleway;
+    font-size: 12pt;
+    text-align: center;
+}
+
+@media screen and (max-width:1130px){
+    #ct1{
+        width: 250px;
+    }
+
+    #ct2{
+        width: 250px;
+    }
+
+    #ct3{
+        width: 250px;
+    }
+
+    #abtcont img{
+        width: 250px;
+    }
+}
+
+@media screen and (max-width:768px){
+    #ct1{
+        width: 220px;
+    }
+
+    #ct2{
+        width: 220px;
+    }
+
+    #ct3{
+        width: 220px;
+    }
+
+    #abtcont img{
+        width: 220px;
+    }
+
+    #weare{
+        font-size: 50pt;
+    }
+
+    #now{
+        font-size: 16pt;
+    
+    }
+
+    .txt{
+        font-size: 17pt;
+    }
+}
+
+@media screen and (max-width:768px){
+    
+    #abtcont{
+        display: flex;
+        flex-direction: column;
+        margin-bottom: 20px;
+    }
+
+    #ct1{
+        width: 400px;
+        margin:  10px auto;
+    }
+
+    #ct2{
+        width: 400px;
+        margin:  0 auto;
+    }
+
+    #ct3{
+        width: 400px;
+        margin:  0 auto;
+    }
+
+    #abtcont img{
+        width: 400px;
+    }
+
+    #weare{
+        font-size: 50pt;
+    }
+
+    #now{
+        font-size: 16pt;
+    
+    }
+
+    .txt{
+        font-size: 17pt;
+    }
+}

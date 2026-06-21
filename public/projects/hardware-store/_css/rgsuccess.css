@@ -1,0 +1,31 @@
+.sg{
+    display: flex;
+    flex-direction: column;
+}
+.sg p{
+    margin: 25px auto;
+    font-size: 30pt;
+    font-family: ralewaybold;
+}
+#pls{
+    font-size: 19pt;
+}
+
+#reg{
+    margin-top: 50px;
+}
+.sg div{
+    margin: 25px auto;
+    margin-bottom: 100px;
+}
+
+input[type=button]{
+    width: 350px;
+    height: 50px;
+    font-size: 21pt;
+    font-family: myriadpro;
+    text-align: center;
+    font-weight: bolder;
+    color: white;
+    background-color: #ff6634;
+}
