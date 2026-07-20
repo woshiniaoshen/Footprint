@@ -259,15 +259,17 @@ function useIsMobile() {
 
 const palette = {
   ink: "#111827",
-  panel: "rgba(17,24,39,0.88)",
-  panelSoft: "rgba(255,255,255,0.075)",
-  line: "rgba(255,255,255,0.13)",
+  panel: "rgba(15,23,34,0.92)",
+  panelStrong: "rgba(15,23,34,0.97)",
+  panelSoft: "rgba(255,255,255,0.08)",
+  line: "rgba(255,255,255,0.14)",
   text: "#F7F3EA",
-  muted: "rgba(247,243,234,0.62)",
-  accent: "#FF6B4A",
-  accentDark: "#D94C30",
+  muted: "rgba(247,243,234,0.66)",
+  quiet: "rgba(247,243,234,0.42)",
+  accent: "#F45F43",
+  accentDark: "#CF472D",
   mint: "#42D9B8",
-  sky: "#5DADEC",
+  sky: "#63B3ED",
   gold: "#F2C36B",
 };
 
@@ -1398,23 +1400,25 @@ function AuthScreen({ onAuth }) {
   return (
     <div style={authContainerStyle}>
       <Fonts />
-      <div style={{ width: "min(980px, calc(100vw - 32px))", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(320px, 100%), 1fr))", gap: 24, alignItems: "stretch", position: "relative", zIndex: 10 }}>
-      <div style={{ ...authCardStyle, width: "100%", maxWidth: "none", display: "flex", flexDirection: "column", justifyContent: "center" }}>
+      <div style={{ width: "min(1040px, calc(100vw - 32px))", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(330px, 100%), 1fr))", gap: 18, alignItems: "stretch", position: "relative", zIndex: 10 }}>
+      <div style={{ ...authCardStyle, width: "100%", maxWidth: "none", display: "flex", flexDirection: "column", justifyContent: "space-between", minHeight: 456, overflow: "hidden" }}>
         <BrandLockup align="left" titleSize={38} />
-        <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 34, lineHeight: 1.05, margin: "28px 0 12px" }}>Turn your photos into a travel map</h2>
-        <p style={{ color: palette.muted, fontSize: 15, lineHeight: 1.7, margin: 0 }}>
-          Footprint reads GPS data from your photos, places them on a map, and builds a visual timeline of where you have been. You can upload JPG, PNG, HEIC, explore popular places, and revisit each memory by clicking its photo.
-        </p>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginTop: 24 }}>
-          {["Upload", "Map", "Remember"].map((label, index) => (
-            <div key={label} style={{ padding: 12, borderRadius: 14, background: "rgba(255,255,255,0.07)", border: `1px solid ${palette.line}` }}>
+        <div>
+          <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 38, lineHeight: 1.03, margin: "28px 0 12px" }}>Turn your photos into a travel map</h2>
+          <p style={{ color: palette.muted, fontSize: 15, lineHeight: 1.7, margin: 0 }}>
+            Upload JPG, PNG, or HEIC photos, map the places they were taken, and browse your travel memories through pins, photos, and popular-place heatmaps.
+          </p>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10, marginTop: 28 }}>
+          {["Upload", "Locate", "Relive"].map((label, index) => (
+            <div key={label} style={{ padding: 14, borderRadius: 12, background: "rgba(255,255,255,0.065)", border: `1px solid ${palette.line}` }}>
               <div style={{ color: [palette.mint, palette.gold, palette.sky][index], fontWeight: 800, fontSize: 20 }}>{index + 1}</div>
               <div style={{ marginTop: 4, fontSize: 12, fontWeight: 700 }}>{label}</div>
             </div>
           ))}
         </div>
       </div>
-      <div style={authCardStyle}>
+      <div style={{ ...authCardStyle, alignSelf: "center" }}>
         <div style={{ textAlign: "center", marginBottom: 32 }}>
           <BrandLockup />
         </div>
@@ -2075,14 +2079,15 @@ function AppToast({ toast, onClose }) {
 const zoomBtnStyle = { width: 36, height: 36, border: "none", borderRadius: 10, background: "rgba(255,255,255,0.94)", cursor: "pointer", fontSize: 20, fontWeight: 700, color: palette.ink, boxShadow: "0 2px 10px rgba(17,24,39,0.18)", display: "flex", alignItems: "center", justifyContent: "center" };
 
 // ─── Styles ───
-const authContainerStyle = { width: "100%", minHeight: "100vh", fontFamily: "'DM Sans', sans-serif", background: "linear-gradient(145deg, #101827 0%, #17243A 42%, #22312C 100%)", color: palette.text, display: "flex", alignItems: "center", justifyContent: "center", position: "relative", overflow: "hidden", padding: 20 };
-const authCardStyle = { width: "min(420px, calc(100vw - 40px))", maxWidth: 420, padding: "40px 36px", background: "linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0.055))", border: `1px solid ${palette.line}`, borderRadius: 24, backdropFilter: "blur(14px)", position: "relative", zIndex: 10, boxShadow: "0 26px 80px rgba(0,0,0,0.32)", boxSizing: "border-box" };
-const authTitleStyle = { fontFamily: "'DM Sans', sans-serif", fontSize: 18, fontWeight: 600, margin: "0 0 20px", textAlign: "center", opacity: 0.8 };
-const inputStyle = { width: "100%", padding: "14px 16px", background: "rgba(255,255,255,0.085)", border: `1px solid ${palette.line}`, borderRadius: 14, color: palette.text, fontSize: 14, fontFamily: "'DM Sans', sans-serif", outline: "none", boxSizing: "border-box" };
-const authBtnStyle = { width: "100%", padding: "14px", background: `linear-gradient(135deg, ${palette.accent}, ${palette.accentDark})`, color: "white", border: "none", borderRadius: 14, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", boxShadow: "0 12px 28px rgba(255,107,74,0.28)" };
-const secondaryBtnStyle = { padding: "12px 16px", background: "rgba(255,255,255,0.09)", color: palette.text, border: `1px solid ${palette.line}`, borderRadius: 14, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif" };
-const dangerBtnStyle = { padding: "9px 12px", background: "rgba(255,107,74,0.16)", color: "#FFB19F", border: "1px solid rgba(255,107,74,0.35)", borderRadius: 12, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif" };
-const adminStatStyle = { padding: 16, borderRadius: 16, background: "rgba(255,255,255,0.06)", border: `1px solid ${palette.line}`, display: "flex", flexDirection: "column", gap: 4 };
+const appBackground = "radial-gradient(circle at 8% 12%, rgba(66,217,184,0.18), transparent 28%), radial-gradient(circle at 84% 18%, rgba(242,195,107,0.12), transparent 24%), linear-gradient(145deg, #0A1318 0%, #101D2B 48%, #172821 100%)";
+const authContainerStyle = { width: "100%", minHeight: "100vh", fontFamily: "'DM Sans', sans-serif", background: appBackground, color: palette.text, display: "flex", alignItems: "center", justifyContent: "center", position: "relative", overflow: "hidden", padding: 20 };
+const authCardStyle = { width: "min(420px, calc(100vw - 40px))", maxWidth: 420, padding: "34px 32px", background: "linear-gradient(180deg, rgba(15,23,34,0.94), rgba(15,23,34,0.82))", border: `1px solid ${palette.line}`, borderRadius: 18, backdropFilter: "blur(18px)", position: "relative", zIndex: 10, boxShadow: "0 26px 80px rgba(0,0,0,0.34)", boxSizing: "border-box" };
+const authTitleStyle = { fontFamily: "'DM Sans', sans-serif", fontSize: 18, fontWeight: 800, margin: "0 0 20px", textAlign: "center", color: palette.text };
+const inputStyle = { width: "100%", padding: "14px 15px", background: "rgba(255,255,255,0.075)", border: `1px solid ${palette.line}`, borderRadius: 12, color: palette.text, fontSize: 14, fontFamily: "'DM Sans', sans-serif", outline: "none", boxSizing: "border-box" };
+const authBtnStyle = { width: "100%", minHeight: 48, padding: "0 16px", background: `linear-gradient(135deg, ${palette.accent}, ${palette.accentDark})`, color: "white", border: "none", borderRadius: 12, fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", boxShadow: "0 14px 30px rgba(244,95,67,0.28)", display: "inline-flex", alignItems: "center", justifyContent: "center" };
+const secondaryBtnStyle = { minHeight: 42, padding: "0 14px", background: "rgba(255,255,255,0.08)", color: palette.text, border: `1px solid ${palette.line}`, borderRadius: 12, fontSize: 14, fontWeight: 800, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", display: "inline-flex", alignItems: "center", justifyContent: "center" };
+const dangerBtnStyle = { minHeight: 36, padding: "0 12px", background: "rgba(244,95,67,0.14)", color: "#FFB19F", border: "1px solid rgba(244,95,67,0.36)", borderRadius: 10, fontSize: 12, fontWeight: 800, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", display: "inline-flex", alignItems: "center", justifyContent: "center" };
+const adminStatStyle = { padding: 16, borderRadius: 14, background: "rgba(255,255,255,0.06)", border: `1px solid ${palette.line}`, display: "flex", flexDirection: "column", gap: 4 };
 
 function Fonts() { return <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet" />; }
 
@@ -2478,7 +2483,7 @@ export default function App() {
   if (needsUsername) return <UsernameSetup user={user} onComplete={(p) => { setProfile({ id: user.id || user.uid, ...p }); setNeedsUsername(false); }} />;
 
   return (
-    <div style={{ width: "100%", minHeight: "100vh", fontFamily: "'DM Sans', sans-serif", background: "linear-gradient(145deg, #101827 0%, #17243A 42%, #22312C 100%)", color: palette.text, position: "relative", overflow: "hidden" }}>
+    <div style={{ width: "100%", minHeight: "100vh", fontFamily: "'DM Sans', sans-serif", background: appBackground, color: palette.text, position: "relative", overflow: "hidden" }}>
       <Fonts />
       <AppToast toast={toast} onClose={() => setToast(null)} />
 
@@ -2495,10 +2500,10 @@ export default function App() {
       {showActivityPanel && <ActivityPanel currentUser={user} onClose={() => { setShowActivityPanel(false); refreshSocialNotifications(); }} onOpenFriends={() => { setShowActivityPanel(false); setShowFriendsPanel(true); }} onPhotoClick={(pin) => { setShowActivityPanel(false); setPublicSamplePin(pin); }} />}
 
       {/* Header */}
-      <header style={{ padding: isMobile ? "10px 16px" : "14px 28px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "relative", zIndex: 10, borderBottom: `1px solid ${palette.line}`, background: "rgba(17,24,39,0.72)", backdropFilter: "blur(18px)" }}>
+      <header style={{ minHeight: isMobile ? 62 : 78, padding: isMobile ? "10px 14px" : "14px 28px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "relative", zIndex: 10, borderBottom: `1px solid ${palette.line}`, background: "rgba(10,19,24,0.84)", backdropFilter: "blur(18px)", boxShadow: "0 12px 34px rgba(0,0,0,0.18)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <BrandLockup align="left" titleSize={isMobile ? 20 : 26} compact />
-          <span style={{ fontSize: 10, opacity: 0.35, letterSpacing: "0.5px", marginTop: 2 }}>v{APP_VERSION}</span>
+          <span style={{ fontSize: 10, color: palette.quiet, marginTop: 2 }}>v{APP_VERSION}</span>
         </div>
 
         <div style={{ display: "flex", gap: isMobile ? 10 : 20, alignItems: "center" }}>
@@ -2506,7 +2511,7 @@ export default function App() {
             <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800, color: palette.mint }}>{stats.countries}</div><div style={{ fontSize: 9, opacity: 0.5, letterSpacing: "1px" }}>COUNTRIES</div></div>
             <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800, color: palette.gold }}>{stats.cities}</div><div style={{ fontSize: 9, opacity: 0.5, letterSpacing: "1px" }}>CITIES</div></div>
             <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800, color: palette.sky }}>{pins.length}</div><div style={{ fontSize: 9, opacity: 0.5, letterSpacing: "1px" }}>PHOTOS</div></div>
-            <button onClick={clearAll} title="Remove all photos from your map" style={secondaryBtnStyle}>Clear All</button>
+            <button onClick={clearAll} title="Remove all photos from your map" style={{ ...secondaryBtnStyle, minHeight: 38 }}>Clear All</button>
           </>}
           {pins.length > 0 && isMobile && <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
             <div style={{ textAlign: "center" }}><div style={{ fontSize: 16, fontWeight: 800, color: palette.mint }}>{stats.countries}</div><div style={{ fontSize: 8, opacity: 0.5, letterSpacing: "1px" }}>CNTRS</div></div>
@@ -2515,7 +2520,7 @@ export default function App() {
 
           {/* User avatar & dropdown */}
           <div style={{ position: "relative", paddingLeft: pins.length > 0 ? 12 : 0, borderLeft: pins.length > 0 ? "1px solid rgba(255,255,255,0.1)" : "none" }}>
-            <div role="button" tabIndex={0} aria-label="Open profile menu" onKeyDown={(e) => e.key === "Enter" && setShowUserMenu(!showUserMenu)} onClick={() => setShowUserMenu(!showUserMenu)} style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", padding: "5px 9px", borderRadius: 16, background: showUserMenu ? "rgba(255,255,255,0.09)" : "transparent", transition: "background 0.2s" }}>
+            <div role="button" tabIndex={0} aria-label="Open profile menu" onKeyDown={(e) => e.key === "Enter" && setShowUserMenu(!showUserMenu)} onClick={() => setShowUserMenu(!showUserMenu)} style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", padding: "5px 8px", borderRadius: 14, background: showUserMenu ? "rgba(255,255,255,0.09)" : "rgba(255,255,255,0.035)", border: `1px solid ${showUserMenu ? palette.line : "transparent"}`, transition: "background 0.2s" }}>
               <div onClick={(e) => { e.stopPropagation(); setShowUserMenu(false); setShowProfilePreview(true); }} title="View profile picture" style={{
                 width: 36, height: 36, borderRadius: "50%", flexShrink: 0,
                 background: profile?.avatar_url ? `url(${profile.avatar_url}) center/cover` : `linear-gradient(135deg, ${palette.accent}, ${palette.sky})`,
@@ -2527,9 +2532,9 @@ export default function App() {
                 {!profile?.avatar_url && (profile?.username?.charAt(0).toUpperCase() || "?")}
                 {socialNotificationTotal > 0 && <span aria-label={`${socialNotificationTotal} notifications`} style={{ position: "absolute", top: -5, right: -5, minWidth: 18, height: 18, padding: "0 5px", borderRadius: 9, background: palette.accent, color: "white", border: "2px solid #111827", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 900 }}>{socialNotificationTotal > 99 ? "99+" : socialNotificationTotal}</span>}
               </div>
-              <div style={{ display: isMobile ? "none" : "block" }}>
+              <div style={{ display: isMobile ? "none" : "block", maxWidth: 190 }}>
                 <div style={{ fontSize: 13, fontWeight: 600 }}>@{profile?.username}</div>
-                <div style={{ fontSize: 10, opacity: 0.4 }}>{user.email}</div>
+                <div style={{ fontSize: 10, color: palette.quiet, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.email}</div>
               </div>
               <span aria-hidden="true" style={{ fontSize: 10, opacity: 0.4, marginLeft: 4 }}>▼</span>
             </div>
@@ -2581,23 +2586,23 @@ export default function App() {
         const cur = pendingPhotos[0];
         const hasSuggestion = !!cur.suggestion;
         return (
-          <div style={{ position: "fixed", top: isMobile ? 58 : 78, left: "50%", transform: "translateX(-50%)", zIndex: 200, background: "rgba(17,24,39,0.97)", border: `1px solid ${hasSuggestion ? palette.mint : palette.gold}`, borderRadius: 16, padding: "12px 16px", display: "flex", alignItems: "center", gap: 12, boxShadow: "0 8px 32px rgba(0,0,0,0.4)", maxWidth: "calc(100vw - 24px)" }}>
+          <div style={{ position: "fixed", top: isMobile ? 70 : 90, left: "50%", transform: "translateX(-50%)", zIndex: 200, background: palette.panelStrong, border: `1px solid ${hasSuggestion ? palette.mint : palette.gold}`, borderRadius: 14, padding: isMobile ? "10px 12px" : "12px 14px", display: "flex", alignItems: "center", gap: 12, boxShadow: "0 18px 44px rgba(0,0,0,0.36)", width: "max-content", maxWidth: "calc(100vw - 24px)", flexWrap: isMobile ? "wrap" : "nowrap" }}>
             {cur.thumb && <img src={cur.thumb} alt="" style={{ width: 40, height: 40, borderRadius: 8, objectFit: "cover", flexShrink: 0 }} />}
             <div style={{ minWidth: 0, flex: 1 }}>
               {hasSuggestion ? (
                 <>
                   <div style={{ fontSize: 13, fontWeight: 700, color: palette.mint }}>Is this location correct?</div>
                   <div style={{ fontSize: 12, opacity: 0.8, marginTop: 1 }}>{cur.suggestion.place}</div>
-                  <div style={{ fontSize: 10, opacity: 0.45, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cur.fileName} · choose sharing before saving</div>
+                  <div style={{ fontSize: 10, color: palette.quiet, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cur.fileName} · choose sharing before saving</div>
                 </>
               ) : (
                 <>
                   <div style={{ fontSize: 13, fontWeight: 700, color: palette.gold }}>No GPS — tap map to place</div>
-                  <div style={{ fontSize: 10, opacity: 0.45, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cur.fileName}{pendingPhotos.length > 1 ? ` (+${pendingPhotos.length - 1} more)` : ""} · choose sharing before saving</div>
+                  <div style={{ fontSize: 10, color: palette.quiet, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cur.fileName}{pendingPhotos.length > 1 ? ` (+${pendingPhotos.length - 1} more)` : ""} · choose sharing before saving</div>
                 </>
               )}
             </div>
-            <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end", marginLeft: "auto" }}>
               <div style={{ display: "flex", alignItems: "center", padding: 3, borderRadius: 12, background: "rgba(255,255,255,0.08)", border: `1px solid ${palette.line}` }}>
                 {[{ label: "Private", value: false }, { label: "Public", value: true }].map(option => (
                   <button key={option.label} onClick={() => updatePendingVisibility(option.value)} style={{
@@ -2629,18 +2634,18 @@ export default function App() {
       })()}
 
       {/* Main content */}
-      <div style={{ display: "flex", height: isMobile ? "calc(100dvh - 58px)" : "calc(100vh - 76px)", position: "relative", zIndex: 5 }}>
+      <div style={{ display: "flex", height: isMobile ? "calc(100dvh - 62px)" : "calc(100vh - 78px)", position: "relative", zIndex: 5 }}>
         {/* Mobile timeline drawer */}
         {isMobile && showTimeline && pins.length > 0 && (
           <div onClick={() => setShowTimeline(false)} style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(0,0,0,0.5)" }}>
-            <div onClick={e => e.stopPropagation()} style={{ position: "absolute", bottom: 0, left: 0, right: 0, maxHeight: "70vh", background: "rgba(17,24,39,0.98)", borderRadius: "20px 20px 0 0", border: `1px solid ${palette.line}`, display: "flex", flexDirection: "column" }}>
+            <div onClick={e => e.stopPropagation()} style={{ position: "absolute", bottom: 0, left: 0, right: 0, maxHeight: "70vh", background: palette.panelStrong, borderRadius: "18px 18px 0 0", border: `1px solid ${palette.line}`, display: "flex", flexDirection: "column", boxShadow: "0 -20px 54px rgba(0,0,0,0.32)" }}>
               <div style={{ padding: "14px 20px 10px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <h2 style={{ margin: 0, fontSize: 13, letterSpacing: "1px", opacity: 0.5, fontWeight: 600 }}>TIMELINE</h2>
+                <h2 style={{ margin: 0, fontSize: 13, color: palette.quiet, fontWeight: 800 }}>TIMELINE</h2>
                 <button onClick={() => setShowTimeline(false)} style={{ background: "none", border: "none", color: palette.text, fontSize: 20, cursor: "pointer", opacity: 0.5 }}>×</button>
               </div>
               <div style={{ flex: 1, overflowY: "auto", padding: "6px 0" }}>
                 {sortedPins.map((pin) => (
-                  <div key={pin.id} onClick={() => { setSelectedPin(pin.id); setCenter({ lat: pin.lat, lon: pin.lon }); setZoom(12); setShowTimeline(false); }} style={{ display: "flex", gap: 12, padding: "10px 20px", cursor: "pointer", background: selectedPin === pin.id ? "rgba(230,57,70,0.1)" : "transparent", borderLeft: selectedPin === pin.id ? "3px solid #E63946" : "3px solid transparent" }}>
+                  <div key={pin.id} onClick={() => { setSelectedPin(pin.id); setCenter({ lat: pin.lat, lon: pin.lon }); setZoom(12); setShowTimeline(false); }} style={{ display: "flex", gap: 12, padding: "10px 20px", cursor: "pointer", background: selectedPin === pin.id ? "rgba(244,95,67,0.12)" : "transparent", borderLeft: selectedPin === pin.id ? `3px solid ${palette.accent}` : "3px solid transparent" }}>
                     <div onClick={(e) => { e.stopPropagation(); setLightboxPin(pin); }} style={{ width: 48, height: 48, borderRadius: 10, overflow: "hidden", flexShrink: 0, border: "2px solid rgba(255,255,255,0.1)", cursor: "zoom-in" }}>
                       {pin.thumb && <img src={pin.thumb} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
                     </div>
@@ -2655,16 +2660,16 @@ export default function App() {
             </div>
           </div>
         )}
-        <div style={{ width: !isMobile && pins.length > 0 ? 320 : 0, minWidth: !isMobile && pins.length > 0 ? 320 : 0, overflow: "hidden", transition: "all 0.4s cubic-bezier(0.4, 0, 0.2, 1)", borderRight: !isMobile && pins.length > 0 ? "1px solid rgba(255,255,255,0.06)" : "none", display: "flex", flexDirection: "column" }}>
-          <div style={{ padding: "18px 20px 10px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-            <h2 style={{ margin: 0, fontSize: 13, letterSpacing: "1px", opacity: 0.5, fontWeight: 600 }}>TIMELINE</h2>
+        <div style={{ width: !isMobile && pins.length > 0 ? 332 : 0, minWidth: !isMobile && pins.length > 0 ? 332 : 0, overflow: "hidden", transition: "all 0.35s cubic-bezier(0.4, 0, 0.2, 1)", borderRight: !isMobile && pins.length > 0 ? "1px solid rgba(255,255,255,0.08)" : "none", display: "flex", flexDirection: "column", background: "rgba(10,19,24,0.72)", backdropFilter: "blur(12px)" }}>
+          <div style={{ padding: "18px 20px 12px", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+            <h2 style={{ margin: 0, fontSize: 13, color: palette.quiet, fontWeight: 800 }}>TIMELINE</h2>
           </div>
           <div style={{ flex: 1, overflowY: "auto", padding: "6px 0" }}>
             {sortedPins.map((pin) => (
               <div key={pin.id} onClick={() => { setSelectedPin(pin.id); setCenter({ lat: pin.lat, lon: pin.lon }); setZoom(12); }} style={{
                 display: "flex", gap: 12, padding: "10px 20px", cursor: "pointer",
-                background: selectedPin === pin.id ? "rgba(230,57,70,0.1)" : "transparent",
-                borderLeft: selectedPin === pin.id ? "3px solid #E63946" : "3px solid transparent",
+                background: selectedPin === pin.id ? "rgba(244,95,67,0.12)" : "transparent",
+                borderLeft: selectedPin === pin.id ? `3px solid ${palette.accent}` : "3px solid transparent",
                 transition: "all 0.2s ease",
               }}>
                 <div onClick={(e) => { e.stopPropagation(); setLightboxPin(pin); }} style={{
@@ -2708,20 +2713,20 @@ export default function App() {
           </div>}
 
           {!loading && pins.length === 0 && !processing && !showHeatmap && (
-            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 20, background: "rgba(10,10,15,0.7)", backdropFilter: "blur(4px)" }}>
-              <div style={{ textAlign: "center", padding: 48, border: `2px dashed ${palette.line}`, borderRadius: 24, background: "rgba(255,255,255,0.055)", maxWidth: 420, boxShadow: "0 22px 70px rgba(0,0,0,0.22)" }}>
+            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 20, background: "linear-gradient(180deg, rgba(10,19,24,0.42), rgba(10,19,24,0.72))", backdropFilter: "blur(3px)", padding: 18 }}>
+              <div style={{ textAlign: "center", padding: isMobile ? 28 : 42, border: `1px dashed rgba(247,243,234,0.26)`, borderRadius: 18, background: "rgba(15,23,34,0.82)", maxWidth: 430, boxShadow: "0 22px 70px rgba(0,0,0,0.28)" }}>
                 <div style={{ display: "flex", justifyContent: "center", marginBottom: 18 }}><LogoMark size={64} /></div>
-                <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 26, fontWeight: 800, margin: "0 0 8px" }}>{isMobile ? "Tap + to add photos" : "Drop your photos here"}</h2>
-                <p style={{ fontSize: 14, opacity: 0.5, margin: "0 0 24px", lineHeight: 1.6 }}>{isMobile ? "Upload photos with GPS and watch your travels appear on the map" : <>Upload photos with GPS data and watch<br />your travels appear on the map</>}</p>
+                <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: isMobile ? 24 : 28, fontWeight: 800, margin: "0 0 8px" }}>{isMobile ? "Start your map" : "Drop your travel photos"}</h2>
+                <p style={{ fontSize: 14, color: palette.muted, margin: "0 0 24px", lineHeight: 1.6 }}>{isMobile ? "Upload photos with GPS and Footprint will place them on the map." : <>Footprint reads GPS metadata, creates pins, and builds a timeline you can revisit.</>}</p>
                 <button onClick={() => fileInputRef.current?.click()} style={{ ...authBtnStyle, width: "auto", padding: "14px 36px", transition: "transform 0.2s ease" }}
                   onMouseEnter={e => e.target.style.transform = "scale(1.05)"} onMouseLeave={e => e.target.style.transform = "scale(1)"}>Choose Photos</button>
               </div>
             </div>
           )}
 
-          <div style={{ position: "absolute", top: 16, left: 16, zIndex: 30, display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {!isMobile && <button onClick={() => fileInputRef.current?.click()} style={{ background: `linear-gradient(135deg, ${palette.accent}, ${palette.accentDark})`, color: "white", border: "none", padding: "10px 18px", borderRadius: 14, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", boxShadow: "0 12px 28px rgba(255,107,74,0.25)", display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontSize: 18 }}>+</span> Add Photos</button>}
-            <div style={{ display: "flex", alignItems: "center", gap: 4, padding: 3, borderRadius: 14, background: "rgba(17,24,39,0.78)", border: `1px solid ${showHeatmap ? palette.mint : palette.line}`, boxShadow: "0 12px 28px rgba(0,0,0,0.18)" }}>
+          <div style={{ position: "absolute", top: 16, left: 16, right: isMobile ? 16 : "auto", zIndex: 30, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            {!isMobile && <button onClick={() => fileInputRef.current?.click()} style={{ ...authBtnStyle, width: "auto", minHeight: 42, padding: "0 18px", fontSize: 13, boxShadow: "0 12px 28px rgba(244,95,67,0.25)", gap: 8 }}><span style={{ fontSize: 18 }}>+</span> Add Photos</button>}
+            <div style={{ display: "flex", alignItems: "center", gap: 4, padding: 3, borderRadius: 14, background: "rgba(10,19,24,0.84)", border: `1px solid ${showHeatmap ? palette.mint : palette.line}`, boxShadow: "0 12px 28px rgba(0,0,0,0.18)", backdropFilter: "blur(12px)" }}>
               {[
                 { value: "global", label: isMobile ? "Global" : "Global Popular Places" },
                 { value: "own", label: isMobile ? "Mine" : "My Popular Places" },
@@ -2740,10 +2745,10 @@ export default function App() {
               ))}
               {showHeatmap && <button onClick={togglePopularPlaces} title="Hide heatmap" style={{ ...dangerBtnStyle, width: 28, height: 28, padding: 0, borderRadius: 9 }}>x</button>}
             </div>
-            {isMobile && pins.length > 0 && <button onClick={() => setShowTimeline(t => !t)} style={{ ...secondaryBtnStyle, padding: "10px 14px", background: "rgba(17,24,39,0.78)", boxShadow: "0 12px 28px rgba(0,0,0,0.18)" }}>☰</button>}
+            {isMobile && pins.length > 0 && <button onClick={() => setShowTimeline(t => !t)} aria-label="Open timeline" style={{ ...secondaryBtnStyle, minWidth: 42, padding: 0, background: "rgba(10,19,24,0.84)", boxShadow: "0 12px 28px rgba(0,0,0,0.18)" }}>☰</button>}
           </div>
 
-          {showHeatmap && <div style={{ position: "absolute", left: 16, bottom: 16, zIndex: 30, background: "rgba(17,24,39,0.82)", border: `1px solid ${palette.line}`, borderRadius: 12, padding: "9px 12px", color: palette.text, fontSize: 12, boxShadow: "0 12px 30px rgba(0,0,0,0.2)", lineHeight: 1.45 }}>
+          {showHeatmap && <div style={{ position: "absolute", left: 16, bottom: 16, zIndex: 30, background: "rgba(10,19,24,0.84)", border: `1px solid ${palette.line}`, borderRadius: 12, padding: "9px 12px", color: palette.text, fontSize: 12, boxShadow: "0 12px 30px rgba(0,0,0,0.2)", lineHeight: 1.45, backdropFilter: "blur(12px)" }}>
             <div>Showing {activeHeatPoints.length} {activeHeatLabel}</div>
             {heatmapScope === "global" && (
               <div style={{ color: palette.mint, fontWeight: 800 }}>
@@ -2754,8 +2759,8 @@ export default function App() {
 
           {dragOver && <div style={{ position: "absolute", inset: 0, zIndex: 40, background: "rgba(230,57,70,0.15)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", border: "3px dashed #E63946", borderRadius: 16, margin: 8 }}><div style={{ fontSize: 22, fontWeight: 700, color: "#E63946" }}>Drop photos here</div></div>}
 
-          {processing && <div style={{ position: "absolute", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 50, background: "rgba(15,15,15,0.92)", color: "#e8e6e1", padding: "12px 24px", borderRadius: 12, fontSize: 14, boxShadow: "0 4px 20px rgba(0,0,0,0.4)", display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ width: 16, height: 16, border: "2px solid rgba(230,57,70,0.3)", borderTop: "2px solid #E63946", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />Reading GPS data...</div>}
+          {processing && <div style={{ position: "absolute", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 50, background: palette.panelStrong, color: palette.text, padding: "12px 18px", borderRadius: 12, fontSize: 14, boxShadow: "0 14px 34px rgba(0,0,0,0.36)", display: "flex", alignItems: "center", gap: 10, border: `1px solid ${palette.line}` }}>
+            <div style={{ width: 16, height: 16, border: "2px solid rgba(244,95,67,0.28)", borderTop: `2px solid ${palette.accent}`, borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />Reading GPS data...</div>}
 
           <input ref={fileInputRef} type="file" multiple accept="image/*,.heic,.heif" style={{ display: "none" }} onChange={(e) => processFiles(e.target.files)} />
           {/* Mobile FAB */}

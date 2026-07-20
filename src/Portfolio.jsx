@@ -97,7 +97,7 @@ export default function Portfolio() {
             <img src="/hardware-store-preview.png" alt="Yong Huat Hardware academic website" />
           </a>
           <div className="project-copy">
-            <p className="project-number">02 Â· Polytechnic project</p>
+            <p className="project-number">02 · Polytechnic project</p>
             <h3>Hardware Store</h3>
             <p>
               A responsive PHP and MySQL e-commerce coursework project with product browsing,
