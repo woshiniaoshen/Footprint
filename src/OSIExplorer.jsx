@@ -23,7 +23,13 @@ function parseCidr(str) {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const LC = {7:"#a78bfa",6:"#63b3ed",5:"#42d9b8",4:"#f2c36b",3:"#fb923c",2:"#e63946",1:"#94a3b8"};
-const MACS = { pcA:"AA:BB:CC:11:22:33", pcB:"CC:DD:EE:44:55:66", rtrA:"DD:EE:FF:00:11:22", rtrB:"EE:FF:00:11:22:33" };
+const MACS = { rtrA:"DD:EE:FF:00:11:22", rtrB:"EE:FF:00:11:22:33" };
+const MAC_POOL_A = ["AA:BB:CC:11:22:33","AA:BB:CC:11:22:44","AA:BB:CC:11:22:55","AA:BB:CC:11:22:66"];
+const MAC_POOL_B = ["CC:DD:EE:44:55:66","CC:DD:EE:44:55:77","CC:DD:EE:44:55:88","CC:DD:EE:44:55:99"];
+const PC_NAMES_A = ["PC-A","PC-C","PC-E","PC-G"];
+const PC_NAMES_B = ["PC-B","PC-D","PC-F","PC-H"];
+const PC_KEYS_A  = ["A","A2","A3","A4"];
+const PC_KEYS_B  = ["B","B2","B3","B4"];
 const LAYERS = [
   {num:7,name:"Application", pdu:"Data",    proto:"HTTP · DNS · FTP · SMTP"},
   {num:6,name:"Presentation",pdu:"Data",    proto:"TLS · SSL · ASCII · JSON"},
@@ -41,8 +47,8 @@ const HM = {
 const ROUTER_AFTER = new Set(["router_fwd","transit_b","pcb_l1","pcb_l2","pcb_l3","pcb_l4","pcb_l5","pcb_l6","pcb_l7","done"]);
 
 const DEFAULT_INPUT = {
-  lanA: { cidr:"192.168.1.0/24", gatewayIp:"192.168.1.1", pcAIp:"192.168.1.10", vlanId:10 },
-  lanB: { cidr:"192.168.2.0/24", gatewayIp:"192.168.2.1", pcBIp:"192.168.2.20", vlanId:20 },
+  lanA: { cidr:"192.168.1.0/24", gatewayIp:"192.168.1.1", pcs:[{ip:"192.168.1.10"}], vlanId:10 },
+  lanB: { cidr:"192.168.2.0/24", gatewayIp:"192.168.2.1", pcs:[{ip:"192.168.2.20"}], vlanId:20 },
   vlanEnabled: false,
 };
 
@@ -70,14 +76,25 @@ function validateIp(ipStr, si, ...otherIps) {
 function buildCfg(input) {
   const siA = parseCidr(input.lanA.cidr) || parseCidr("192.168.1.0/24");
   const siB = parseCidr(input.lanB.cidr) || parseCidr("192.168.2.0/24");
-  const vA  = validateIp(input.lanA.gatewayIp, siA);
-  const vB  = validateIp(input.lanB.gatewayIp, siB);
-  const gwA = vA.ok ? input.lanA.gatewayIp : siA.firstHost;
-  const gwB = vB.ok ? input.lanB.gatewayIp : siB.firstHost;
-  const vpA = validateIp(input.lanA.pcAIp, siA, gwA);
-  const vpB = validateIp(input.lanB.pcBIp, siB, gwB);
-  const pcAIp = vpA.ok ? input.lanA.pcAIp : numToIp(ipToNum(siA.network)+10);
-  const pcBIp = vpB.ok ? input.lanB.pcBIp : numToIp(ipToNum(siB.network)+20);
+  const vGwA = validateIp(input.lanA.gatewayIp, siA);
+  const vGwB = validateIp(input.lanB.gatewayIp, siB);
+  const gwA  = vGwA.ok ? input.lanA.gatewayIp : siA.firstHost;
+  const gwB  = vGwB.ok ? input.lanB.gatewayIp : siB.firstHost;
+
+  function buildPcs(pcsInput, si, gw, macPool, names, keys, defaultOffset) {
+    return (pcsInput||[{ip:numToIp(ipToNum(si.network)+defaultOffset)}]).slice(0,4).map((pc, i) => {
+      const usedIps = [gw, ...pcsInput.slice(0,i).map(p=>p.ip)];
+      const v = validateIp(pc.ip, si, ...usedIps);
+      return {
+        ip:   v.ok ? pc.ip : numToIp(ipToNum(si.network) + defaultOffset + i*10),
+        mac:  macPool[i], mask: si.mask, cidr: si.cidr, gw,
+        name: names[i], key: keys[i],
+      };
+    });
+  }
+
+  const pcsA = buildPcs(input.lanA.pcs, siA, gwA, MAC_POOL_A, PC_NAMES_A, PC_KEYS_A, 10);
+  const pcsB = buildPcs(input.lanB.pcs, siB, gwB, MAC_POOL_B, PC_NAMES_B, PC_KEYS_B, 20);
   const lanA = { ...siA, gateway:gwA,
     dhcpStart: numToIp(ipToNum(siA.network)+2), dhcpEnd: siA.lastHost,
     vlan: input.vlanEnabled ? (parseInt(input.lanA.vlanId)||10) : null };
@@ -85,10 +102,9 @@ function buildCfg(input) {
     dhcpStart: numToIp(ipToNum(siB.network)+2), dhcpEnd: siB.lastHost,
     vlan: input.vlanEnabled ? (parseInt(input.lanB.vlanId)||20) : null };
   return {
-    lanA, lanB,
-    pcA:  { ip:pcAIp,  mac:MACS.pcA, mask:siA.mask, cidr:siA.cidr, gw:gwA },
-    pcB:  { ip:pcBIp,  mac:MACS.pcB, mask:siB.mask, cidr:siB.cidr, gw:gwB },
-    router:{ lanAIp:gwA, lanAMac:MACS.rtrA, lanBIp:gwB, lanBMac:MACS.rtrB },
+    lanA, lanB, pcsA, pcsB,
+    pcA: pcsA[0], pcB: pcsB[0],
+    router: { lanAIp:gwA, lanAMac:MACS.rtrA, lanBIp:gwB, lanBMac:MACS.rtrB },
     vlanEnabled: input.vlanEnabled,
   };
 }
@@ -105,38 +121,33 @@ function buildHF(cfg) {
     TCP:  [{f:"Src Port",v:"54231 (ephemeral)"},{f:"Dst Port",v:"80 (HTTP)"},{f:"Seq Number",v:"1"},{f:"Ack Number",v:"0"},{f:"Header Len",v:"20 bytes"},{f:"Flags",v:"[ SYN ]"},{f:"Window",v:"65535 bytes"},{f:"Checksum",v:"0x4A2F"}],
     IP:   [{f:"Version",v:"4 (IPv4)"},{f:"Header Len",v:"20 bytes"},{f:"TTL",v:"64"},{f:"Protocol",v:"6 (TCP)"},{f:"Src IP",v:a.ip},{f:"Dst IP",v:b.ip},{f:"Checksum",v:"0x8A4B"}],
     IP_R: [{f:"Version",v:"4 (IPv4)"},{f:"Header Len",v:"20 bytes"},{f:"TTL",v:"63  ← decremented by router"},{f:"Protocol",v:"6 (TCP)"},{f:"Src IP",v:`${a.ip}  (unchanged)`},{f:"Dst IP",v:`${b.ip}  (unchanged)`},{f:"Checksum",v:"0x8A4C  (recalculated)"}],
-    ETH:  [{f:"Dst MAC",v:MACS.rtrA},{f:"Dst Host",v:"Router (LAN-A port)"},{f:"Src MAC",v:MACS.pcA},{f:"Src Host",v:"PC-A"},...vlanA,{f:"EtherType",v:"0x0800 (IPv4)"}],
+    ETH:  [{f:"Dst MAC",v:MACS.rtrA},{f:"Dst Host",v:"Router (LAN-A port)"},{f:"Src MAC",v:a.mac},{f:"Src Host",v:"PC-A"},...vlanA,{f:"EtherType",v:"0x0800 (IPv4)"}],
     FCS:  [{f:"Algorithm",v:"CRC-32"},{f:"Value",v:"0x1A2B3C4D"},{f:"Purpose",v:"Bit-error detection"}],
-    ETH2: [{f:"Dst MAC",v:MACS.pcB},{f:"Dst Host",v:"PC-B"},{f:"Src MAC",v:MACS.rtrB},{f:"Src Host",v:"Router (LAN-B port)"},...vlanB,{f:"EtherType",v:"0x0800 (IPv4)"},{f:"Note",v:"New header added by router"}],
+    ETH2: [{f:"Dst MAC",v:b.mac},{f:"Dst Host",v:"PC-B"},{f:"Src MAC",v:MACS.rtrB},{f:"Src Host",v:"Router (LAN-B port)"},...vlanB,{f:"EtherType",v:"0x0800 (IPv4)"},{f:"Note",v:"New header added by router"}],
     FCS2: [{f:"Algorithm",v:"CRC-32"},{f:"Value",v:"0x9E8D7C6B"},{f:"Purpose",v:"Bit-error detection"}],
   };
 }
 
 // ── Build DEVICES with dynamic IPs ────────────────────────────────────────────
 function buildDevices(cfg) {
-  const {pcA:a,pcB:b,router:r,lanA,lanB,vlanEnabled} = cfg;
-  return {
-    A:{ name:"PC-A", type:"End Device", rows:[
-      {k:"IP Address",     v:`${a.ip} / ${a.cidr}`},
-      {k:"Subnet Mask",    v:a.mask},
-      {k:"MAC Address",    v:MACS.pcA},
-      {k:"Default Gateway",v:a.gw},
-      {k:"DHCP Server",    v:`${a.gw}  (Router)`},
+  const {pcsA,pcsB,router:r,lanA,lanB,vlanEnabled} = cfg;
+  function pcDev(pc, lan, lanName, isServer=false) {
+    return { name:pc.name, type:isServer?"End Device / Web Server":"End Device", rows:[
+      {k:"IP Address",     v:`${pc.ip} / ${pc.cidr}`},
+      {k:"Subnet Mask",    v:pc.mask},
+      {k:"MAC Address",    v:pc.mac},
+      {k:"Default Gateway",v:pc.gw},
+      {k:"DHCP Server",    v:`${pc.gw}  (Router)`},
       {k:"DNS Server",     v:"8.8.8.8  (Google DNS)"},
-      {k:"Network",        v:`${lanA.network}/${lanA.cidr}  (LAN-A)`},
-      ...(vlanEnabled?[{k:"VLAN",v:`${lanA.vlan}  (Access port)`}]:[]),
-    ]},
-    B:{ name:"PC-B", type:"End Device / Web Server", rows:[
-      {k:"IP Address",     v:`${b.ip} / ${b.cidr}`},
-      {k:"Subnet Mask",    v:b.mask},
-      {k:"MAC Address",    v:MACS.pcB},
-      {k:"Default Gateway",v:b.gw},
-      {k:"DHCP Server",    v:`${b.gw}  (Router)`},
-      {k:"DNS Server",     v:"8.8.8.8  (Google DNS)"},
-      {k:"Network",        v:`${lanB.network}/${lanB.cidr}  (LAN-B)`},
-      {k:"Listening On",   v:"TCP port 80  (HTTP)"},
-      ...(vlanEnabled?[{k:"VLAN",v:`${lanB.vlan}  (Access port)`}]:[]),
-    ]},
+      {k:"Network",        v:`${lan.network}/${lan.cidr}  (${lanName})`},
+      ...(isServer?[{k:"Listening On",v:"TCP port 80  (HTTP)"}]:[]),
+      ...(vlanEnabled?[{k:"VLAN",v:`${lan.vlan}  (Access port)`}]:[]),
+    ]};
+  }
+  const devs = {};
+  pcsA.forEach(pc => { devs[pc.key] = pcDev(pc, lanA, "LAN-A"); });
+  pcsB.forEach((pc,i) => { devs[pc.key] = pcDev(pc, lanB, "LAN-B", i===0); });
+  return { ...devs,
     router:{ name:"Router", type:"Layer 3 Device", rows:[
       {k:"LAN-A IP",       v:`${r.lanAIp} / ${lanA.cidr}`},
       {k:"LAN-A MAC",      v:MACS.rtrA},
@@ -201,24 +212,36 @@ PC-A ARP cache: ${r.lanAIp} → ${MACS.rtrA}  (Router LAN-A)`,
     pca_l7: `HTTP  GET /index.html HTTP/1.1\n      Host: ${b.ip}`,
     pca_l3: `IP  src:${a.ip}  dst:${b.ip}  TTL:64  proto:TCP`,
     pca_l2:
-`ETH  src:${MACS.pcA}  dst:${MACS.rtrA}${vA}  +FCS
+`ETH  src:${a.mac}  dst:${MACS.rtrA}${vA}  +FCS
 (router MAC already in ARP cache from boot phase)`,
     router_rx: `Router strips ETH header + FCS  →  reads IP dst: ${b.ip}`,
-    router_fwd: `New ETH  src:${MACS.rtrB}  dst:${MACS.pcB}${vB}  IP TTL:63`,
+    router_fwd: `New ETH  src:${MACS.rtrB}  dst:${b.mac}${vB}  IP TTL:63`,
   };
   return map[id] ?? null;
 }
 
 // ── Build per-device boot logs (dynamic IPs in details) ───────────────────────
 function buildBootLogs(cfg) {
-  const {pcA:a,pcB:b,router:r,lanA,lanB} = cfg;
-  return {
+  const {pcA:a,pcB:b,router:r,lanA,lanB,pcsA,pcsB} = cfg;
+  function pcLog(pc, dhcpStep, arpStep, gwRtrMac) {
+    return [
+      {stepId:null,       t:"0.00s",icon:"⚡",event:"NIC powered on",  detail:"eth0 link up (1 Gbps)"},
+      {stepId:dhcpStep,   t:"0.10s",icon:"📡",event:"DHCP Discover",   detail:"Broadcast → 255.255.255.255"},
+      {stepId:dhcpStep,   t:"0.20s",icon:"📨",event:"DHCP Offer",      detail:`${pc.gw} offers ${pc.ip}/${pc.cidr}`},
+      {stepId:dhcpStep,   t:"0.25s",icon:"📤",event:"DHCP Request",    detail:`Requesting ${pc.ip}`},
+      {stepId:dhcpStep,   t:"0.30s",icon:"✉", event:"DHCP Ack",        detail:`IP:${pc.ip} GW:${pc.gw} DNS:8.8.8.8`},
+      {stepId:arpStep,    t:"0.40s",icon:"❓",event:"ARP for gateway", detail:`Who has ${pc.gw}? (broadcast)`},
+      {stepId:arpStep,    t:"0.45s",icon:"💡",event:"ARP Reply",       detail:`${gwRtrMac} → cached as GW`},
+      {stepId:arpStep,    t:"0.50s",icon:"✅",event:"Ready",           detail:"Network stack fully configured"},
+    ];
+  }
+  const logs = {
     router:[
       {stepId:null,          t:"0.00s",icon:"⚡",event:"Power on",           detail:"Firmware loading"},
       {stepId:"router_init", t:"0.30s",icon:"🔌",event:"eth0 UP (LAN-A)",   detail:`${r.lanAIp}/${lanA.cidr} assigned`},
       {stepId:"router_init", t:"0.30s",icon:"🔌",event:"eth1 UP (LAN-B)",   detail:`${r.lanBIp}/${lanB.cidr} assigned`},
       {stepId:"router_init", t:"0.50s",icon:"🗺", event:"Routing table built",detail:`${lanA.network}/${lanA.cidr}, ${lanB.network}/${lanB.cidr}`},
-      {stepId:"router_init", t:"0.60s",icon:"📡",event:"DHCP server started",detail:`Pools on both LANs`},
+      {stepId:"router_init", t:"0.60s",icon:"📡",event:"DHCP server started",detail:"Pools on both LANs"},
       {stepId:"router_init", t:"0.70s",icon:"📢",event:"LLDP Hello sent",   detail:"Announced on all ports"},
       {stepId:"router_init", t:"1.00s",icon:"✅",event:"Ready",             detail:"Forwarding enabled"},
     ],
@@ -228,7 +251,7 @@ function buildBootLogs(cfg) {
       {stepId:"switch_init", t:" 0.5s",icon:"👂",event:"STP Listening",    detail:"No superior BPDU received"},
       {stepId:"switch_init", t:"15.0s",icon:"📖",event:"STP Learning",     detail:"Populating MAC table"},
       {stepId:"switch_init", t:"30.0s",icon:"✅",event:"STP Forwarding",   detail:"All ports active"},
-      {stepId:"pca_dhcp",    t:"30+s", icon:"📋",event:"MAC table updated", detail:`${MACS.pcA.slice(0,8)}... learned on Fa0/1`},
+      {stepId:"pca_dhcp",    t:"30+s", icon:"📋",event:"MAC table updated", detail:`${MAC_POOL_A[0].slice(0,8)}... learned on Fa0/1`},
     ],
     switchB:[
       {stepId:null,          t:" 0.0s",icon:"⚡",event:"Power on",          detail:"24 ports initialized"},
@@ -236,29 +259,12 @@ function buildBootLogs(cfg) {
       {stepId:"switch_init", t:" 0.5s",icon:"👂",event:"STP Listening",    detail:"No superior BPDU received"},
       {stepId:"switch_init", t:"15.0s",icon:"📖",event:"STP Learning",     detail:"Populating MAC table"},
       {stepId:"switch_init", t:"30.0s",icon:"✅",event:"STP Forwarding",   detail:"All ports active"},
-      {stepId:"pcb_dhcp",    t:"30+s", icon:"📋",event:"MAC table updated", detail:`${MACS.pcB.slice(0,8)}... learned on Fa0/1`},
-    ],
-    A:[
-      {stepId:null,          t:"0.00s",icon:"⚡",event:"NIC powered on",   detail:"eth0 link up (1 Gbps)"},
-      {stepId:"pca_dhcp",    t:"0.10s",icon:"📡",event:"DHCP Discover",    detail:"Broadcast → 255.255.255.255"},
-      {stepId:"pca_dhcp",    t:"0.20s",icon:"📨",event:"DHCP Offer",       detail:`${r.lanAIp} offers ${a.ip}/${lanA.cidr}`},
-      {stepId:"pca_dhcp",    t:"0.25s",icon:"📤",event:"DHCP Request",     detail:`Requesting ${a.ip}`},
-      {stepId:"pca_dhcp",    t:"0.30s",icon:"✉", event:"DHCP Ack",         detail:`IP:${a.ip} GW:${a.gw} DNS:8.8.8.8`},
-      {stepId:"pca_arp_gw",  t:"0.40s",icon:"❓",event:"ARP for gateway",  detail:`Who has ${a.gw}? (broadcast)`},
-      {stepId:"pca_arp_gw",  t:"0.45s",icon:"💡",event:"ARP Reply",        detail:`${MACS.rtrA} → cached as GW`},
-      {stepId:"pca_arp_gw",  t:"0.50s",icon:"✅",event:"Ready",            detail:"Network stack fully configured"},
-    ],
-    B:[
-      {stepId:null,          t:"0.00s",icon:"⚡",event:"NIC powered on",   detail:"eth0 link up (1 Gbps)"},
-      {stepId:"pcb_dhcp",    t:"0.10s",icon:"📡",event:"DHCP Discover",    detail:"Broadcast → 255.255.255.255"},
-      {stepId:"pcb_dhcp",    t:"0.20s",icon:"📨",event:"DHCP Offer",       detail:`${r.lanBIp} offers ${b.ip}/${lanB.cidr}`},
-      {stepId:"pcb_dhcp",    t:"0.25s",icon:"📤",event:"DHCP Request",     detail:`Requesting ${b.ip}`},
-      {stepId:"pcb_dhcp",    t:"0.30s",icon:"✉", event:"DHCP Ack",         detail:`IP:${b.ip} GW:${b.gw} DNS:8.8.8.8`},
-      {stepId:"pcb_dhcp",    t:"0.40s",icon:"❓",event:"ARP for gateway",  detail:`Who has ${b.gw}? (broadcast)`},
-      {stepId:"pcb_dhcp",    t:"0.45s",icon:"💡",event:"ARP Reply",        detail:`${MACS.rtrB} → cached as GW`},
-      {stepId:"pcb_dhcp",    t:"0.50s",icon:"✅",event:"Ready",            detail:"Network stack fully configured"},
+      {stepId:"pcb_dhcp",    t:"30+s", icon:"📋",event:"MAC table updated", detail:`${MAC_POOL_B[0].slice(0,8)}... learned on Fa0/1`},
     ],
   };
+  pcsA.forEach(pc => { logs[pc.key] = pcLog(pc, "pca_dhcp", "pca_arp_gw", MACS.rtrA); });
+  pcsB.forEach(pc => { logs[pc.key] = pcLog(pc, "pcb_dhcp", "pcb_dhcp",   MACS.rtrB); });
+  return logs;
 }
 
 // ── Simulation steps (IPs removed from desc — shown in proto blocks) ───────────
@@ -385,24 +391,26 @@ function stepAtOrPast(si, id) {
 function getArpState(si, cfg) {
   return {
     router: [
-      stepAtOrPast(si,"router_rx")  && {ip:cfg.pcA.ip, mac:MACS.pcA, iface:"LAN-A"},
-      stepAtOrPast(si,"router_fwd") && {ip:cfg.pcB.ip, mac:MACS.pcB, iface:"LAN-B"},
+      stepAtOrPast(si,"router_rx")  && {ip:cfg.pcA.ip, mac:cfg.pcA.mac, iface:"LAN-A"},
+      stepAtOrPast(si,"router_fwd") && {ip:cfg.pcB.ip, mac:cfg.pcB.mac, iface:"LAN-B"},
     ].filter(Boolean),
     pcA: stepAtOrPast(si,"pca_arp_gw") ? [{ip:cfg.router.lanAIp, mac:MACS.rtrA, host:"Router LAN-A"}] : [],
     pcB: stepAtOrPast(si,"pcb_l2")     ? [{ip:cfg.router.lanBIp, mac:MACS.rtrB, host:"Router LAN-B"}] : [],
   };
 }
 function getDhcpLeases(si, cfg) {
-  return [
-    stepAtOrPast(si,"pca_dhcp") && {ip:cfg.pcA.ip, mac:MACS.pcA, host:"PC-A", iface:"LAN-A", lease:"24h"},
-    stepAtOrPast(si,"pcb_dhcp") && {ip:cfg.pcB.ip, mac:MACS.pcB, host:"PC-B", iface:"LAN-B", lease:"24h"},
-  ].filter(Boolean);
+  const leases = [];
+  if (stepAtOrPast(si,"pca_dhcp"))
+    cfg.pcsA.forEach(pc => leases.push({ip:pc.ip, mac:pc.mac, host:pc.name, iface:"LAN-A", lease:"24h"}));
+  if (stepAtOrPast(si,"pcb_dhcp"))
+    cfg.pcsB.forEach(pc => leases.push({ip:pc.ip, mac:pc.mac, host:pc.name, iface:"LAN-B", lease:"24h"}));
+  return leases;
 }
 function getSwitchAMac(si, cfg) {
   if (!stepAtOrPast(si,"pca_dhcp")) return [];
   const vlan = cfg.vlanEnabled ? cfg.lanA.vlan : 1;
   return [
-    {mac:MACS.pcA,  port:"Fa0/1",  host:"PC-A",          vlan, type:"Dynamic"},
+    ...cfg.pcsA.map((pc,i) => ({mac:pc.mac, port:`Fa0/${i+1}`, host:pc.name, vlan, type:"Dynamic"})),
     {mac:MACS.rtrA, port:"Fa0/24", host:"Router (LAN-A)", vlan, type:"Dynamic"},
   ];
 }
@@ -410,7 +418,7 @@ function getSwitchBMac(si, cfg) {
   if (!stepAtOrPast(si,"pcb_dhcp")) return [];
   const vlan = cfg.vlanEnabled ? cfg.lanB.vlan : 1;
   return [
-    {mac:MACS.pcB,  port:"Fa0/1",  host:"PC-B",          vlan, type:"Dynamic"},
+    ...cfg.pcsB.map((pc,i) => ({mac:pc.mac, port:`Fa0/${i+1}`, host:pc.name, vlan, type:"Dynamic"})),
     {mac:MACS.rtrB, port:"Fa0/24", host:"Router (LAN-B)", vlan, type:"Dynamic"},
   ];
 }
@@ -446,9 +454,20 @@ function IpField({ label, value, onChange, validation, placeholder }) {
   );
 }
 
-function LanBlock({ title, color, cidr, onCidr, gatewayIp, onGateway, pcIp, onPc, pcLabel, vlanEnabled, vlanId, onVlanId, si }) {
-  const vGw = si ? validateIp(gatewayIp, si)                 : null;
-  const vPc = si ? validateIp(pcIp, si, gatewayIp)          : null;
+function LanBlock({ title, color, cidr, onCidr, gatewayIp, onGateway, pcs, onPcs, pcNames, vlanEnabled, vlanId, onVlanId, si }) {
+  const vGw = si ? validateIp(gatewayIp, si) : null;
+  function setPcIp(i, val) {
+    const next = pcs.map((p,j) => j===i ? {ip:val} : p);
+    onPcs(next);
+  }
+  function addPc() {
+    if (pcs.length >= 4) return;
+    onPcs([...pcs, {ip:""}]);
+  }
+  function removePc(i) {
+    if (pcs.length <= 1) return;
+    onPcs(pcs.filter((_,j)=>j!==i));
+  }
   return (
     <div className="osi-cfg-lan">
       <div className="osi-cfg-lanhead" style={{color}}>{title}</div>
@@ -463,8 +482,24 @@ function LanBlock({ title, color, cidr, onCidr, gatewayIp, onGateway, pcIp, onPc
       <IpField label="Router / Gateway IP" value={gatewayIp} onChange={onGateway}
         placeholder={si?.firstHost||"192.168.1.1"} validation={si ? vGw : null}/>
 
-      <IpField label={`${pcLabel} IP`} value={pcIp} onChange={onPc}
-        placeholder={si ? numToIp(ipToNum(si.network)+10) : "192.168.1.10"} validation={si ? vPc : null}/>
+      {pcs.map((pc, i) => {
+        const otherIps = [gatewayIp, ...pcs.map((p,j)=>j!==i?p.ip:null).filter(Boolean)];
+        const v = si ? validateIp(pc.ip, si, ...otherIps) : null;
+        return (
+          <div key={i} className="osi-cfg-pcrow">
+            <IpField label={pcNames[i]+" IP"} value={pc.ip}
+              onChange={val=>setPcIp(i,val)}
+              placeholder={si ? numToIp(ipToNum(si.network)+10+i*10) : ""}
+              validation={v}/>
+            {pcs.length > 1 && (
+              <button className="osi-cfg-pc-remove" onClick={()=>removePc(i)} title="Remove PC">−</button>
+            )}
+          </div>
+        );
+      })}
+      {pcs.length < 4 && (
+        <button className="osi-cfg-pc-add" onClick={addPc}>+ Add PC</button>
+      )}
 
       {vlanEnabled && (
         <label className="osi-cfg-label">VLAN ID
@@ -484,9 +519,17 @@ function NetworkConfigPanel({ draft, setDraft, onApply, onReset, onClose }) {
   const siB = parseCidr(draft.lanB.cidr);
   const vGwA = siA ? validateIp(draft.lanA.gatewayIp, siA) : null;
   const vGwB = siB ? validateIp(draft.lanB.gatewayIp, siB) : null;
-  const vPcA = siA ? validateIp(draft.lanA.pcAIp, siA, draft.lanA.gatewayIp) : null;
-  const vPcB = siB ? validateIp(draft.lanB.pcBIp, siB, draft.lanB.gatewayIp) : null;
-  const canApply = siA && siB && vGwA?.ok && vGwB?.ok && vPcA?.ok && vPcB?.ok;
+  const pcsA = draft.lanA.pcs || [];
+  const pcsB = draft.lanB.pcs || [];
+  const allPcAValid = siA && pcsA.every((pc,i) => {
+    const others = [draft.lanA.gatewayIp, ...pcsA.map((p,j)=>j!==i?p.ip:null).filter(Boolean)];
+    return validateIp(pc.ip, siA, ...others).ok;
+  });
+  const allPcBValid = siB && pcsB.every((pc,i) => {
+    const others = [draft.lanB.gatewayIp, ...pcsB.map((p,j)=>j!==i?p.ip:null).filter(Boolean)];
+    return validateIp(pc.ip, siB, ...others).ok;
+  });
+  const canApply = siA && siB && vGwA?.ok && vGwB?.ok && allPcAValid && allPcBValid;
 
   return (
     <div className="osi-cfg-panel">
@@ -496,16 +539,16 @@ function NetworkConfigPanel({ draft, setDraft, onApply, onReset, onClose }) {
       </div>
       <div className="osi-cfg-grid">
         <LanBlock title="LAN-A" color="#63b3ed" si={siA}
-          cidr={draft.lanA.cidr}       onCidr={v=>setLanA("cidr",v)}
+          cidr={draft.lanA.cidr}           onCidr={v=>setLanA("cidr",v)}
           gatewayIp={draft.lanA.gatewayIp} onGateway={v=>setLanA("gatewayIp",v)}
-          pcIp={draft.lanA.pcAIp}      onPc={v=>setLanA("pcAIp",v)}
-          pcLabel="PC-A"
+          pcs={pcsA}                       onPcs={v=>setLanA("pcs",v)}
+          pcNames={PC_NAMES_A}
           vlanEnabled={draft.vlanEnabled} vlanId={draft.lanA.vlanId} onVlanId={v=>setLanA("vlanId",v)}/>
         <LanBlock title="LAN-B" color="#42d9b8" si={siB}
-          cidr={draft.lanB.cidr}       onCidr={v=>setLanB("cidr",v)}
+          cidr={draft.lanB.cidr}           onCidr={v=>setLanB("cidr",v)}
           gatewayIp={draft.lanB.gatewayIp} onGateway={v=>setLanB("gatewayIp",v)}
-          pcIp={draft.lanB.pcBIp}      onPc={v=>setLanB("pcBIp",v)}
-          pcLabel="PC-B"
+          pcs={pcsB}                       onPcs={v=>setLanB("pcs",v)}
+          pcNames={PC_NAMES_B}
           vlanEnabled={draft.vlanEnabled} vlanId={draft.lanB.vlanId} onVlanId={v=>setLanB("vlanId",v)}/>
       </div>
       <div className="osi-cfg-opts">
@@ -527,59 +570,74 @@ function NetworkConfigPanel({ draft, setDraft, onApply, onReset, onClose }) {
 
 // ── Topology Diagram ──────────────────────────────────────────────────────────
 function TopologyDiagram({ pos, activeSide, selectedDevice, onSelectDevice, cfg }) {
-  const {pcA:a, pcB:b, router:r, lanA, lanB, vlanEnabled} = cfg;
-  const nodes = [
-    {x:85,  label:"PC-A",   ip:a.ip,            mac:MACS.pcA,  key:"A",       shape:"pc"},
-    {x:255, label:"Switch", ip:"No IP  (L2)",    mac:"",        key:"switchA", shape:"sw"},
-    {x:445, label:"Router", ip:`${r.lanAIp}/${r.lanBIp}`, mac:"DD:.. / EE:..", key:"router", shape:"rt"},
-    {x:635, label:"Switch", ip:"No IP  (L2)",    mac:"",        key:"switchB", shape:"sw"},
-    {x:815, label:"PC-B",   ip:b.ip,            mac:MACS.pcB,  key:"B",       shape:"pc"},
+  const {pcA:a, pcB:b, router:r, lanA, lanB, vlanEnabled, pcsA, pcsB} = cfg;
+  const nExtraA = pcsA.length - 1;
+  const nExtraB = pcsB.length - 1;
+  const maxExtra = Math.max(nExtraA, nExtraB);
+  const svgHeight = 162 + maxExtra * 60;
+  const lanAHeight = 122 + nExtraA * 60;
+  const lanBHeight = 122 + nExtraB * 60;
+
+  const mainNodes = [
+    {x:85,  y:78, label:a.name,  ip:a.ip,  mac:a.mac,  key:"A",       shape:"pc"},
+    {x:255, y:78, label:"Switch",ip:"No IP  (L2)", mac:"", key:"switchA", shape:"sw"},
+    {x:445, y:78, label:"Router",ip:`${r.lanAIp}/${r.lanBIp}`, mac:"DD:.. / EE:..", key:"router", shape:"rt"},
+    {x:635, y:78, label:"Switch",ip:"No IP  (L2)", mac:"", key:"switchB", shape:"sw"},
+    {x:815, y:78, label:b.name,  ip:b.ip,  mac:b.mac,  key:"B",       shape:"pc"},
   ];
+  const extraNodesA = pcsA.slice(1).map((pc, i) => ({x:85,  y:78+(i+1)*60, label:pc.name, ip:pc.ip, mac:pc.mac, key:pc.key, shape:"pc"}));
+  const extraNodesB = pcsB.slice(1).map((pc, i) => ({x:815, y:78+(i+1)*60, label:pc.name, ip:pc.ip, mac:pc.mac, key:pc.key, shape:"pc"}));
+  const allNodes = [...mainNodes, ...extraNodesA, ...extraNodesB];
+
   const isActive   = k => activeSide===k||(activeSide==="transit_a"&&k==="switchA")||(activeSide==="transit_b"&&k==="switchB");
   const isSelected = k => selectedDevice===k;
   const dotX = 85 + pos * (815 - 85);
   const lanALabel = `LAN-A · ${lanA.network}/${lanA.cidr}${vlanEnabled?`  · VLAN ${lanA.vlan}`:"  · DHCP: "+lanA.gateway}  ·  DNS: 8.8.8.8`;
   const lanBLabel = `LAN-B · ${lanB.network}/${lanB.cidr}${vlanEnabled?`  · VLAN ${lanB.vlan}`:"  · DHCP: "+lanB.gateway}  ·  DNS: 8.8.8.8`;
 
+  function NodeG({n}) {
+    const active = isActive(n.key), selected = isSelected(n.key);
+    const c  = selected?"#f2c36b":active?"#42d9b8":"rgba(255,255,255,0.28)";
+    const bg = selected?"rgba(242,195,107,0.14)":active?"rgba(66,217,184,0.14)":"rgba(13,19,30,0.95)";
+    const sw = selected||active?2.5:1;
+    return (
+      <g key={n.key} style={{cursor:"pointer"}} onClick={()=>onSelectDevice(selected?null:n.key)}>
+        {selected&&<circle cx={n.x} cy={n.y} r={35} fill="none" stroke="rgba(242,195,107,0.35)" strokeWidth="1.5" strokeDasharray="4 3"/>}
+        <circle cx={n.x} cy={n.y} r={28} fill={bg} stroke={c} strokeWidth={sw}/>
+        {n.shape==="pc"&&<>
+          <rect x={n.x-11} y={n.y-14} width={22} height={15} rx={2} fill="none" stroke={c} strokeWidth={1.5}/>
+          <line x1={n.x-7} y1={n.y+1} x2={n.x+7} y2={n.y+1} stroke={c} strokeWidth={1.5}/>
+          <line x1={n.x-5} y1={n.y+4} x2={n.x+5} y2={n.y+4} stroke={c} strokeWidth={1}/>
+        </>}
+        {n.shape==="rt"&&<polygon points={`${n.x},${n.y-27} ${n.x+18},${n.y} ${n.x},${n.y+27} ${n.x-18},${n.y}`} fill="none" stroke={c} strokeWidth={1.5}/>}
+        {n.shape==="sw"&&<>
+          <rect x={n.x-14} y={n.y-11} width={28} height={19} rx={2} fill="none" stroke={c} strokeWidth={1.5}/>
+          {[-8,-2,4,10].map(dx=><line key={dx} x1={n.x+dx} y1={n.y-11} x2={n.x+dx} y2={n.y-17} stroke={c} strokeWidth={1}/>)}
+        </>}
+        <text x={n.x} y={n.y+36} textAnchor="middle" fontSize="10" fontWeight={active||selected?"700":"500"} fill={selected?"#f2c36b":active?"#42d9b8":"rgba(241,245,249,0.8)"} fontFamily="Inter,sans-serif">{n.label}</text>
+        <text x={n.x} y={n.y+48} textAnchor="middle" fontSize="8" fill={active||selected?"rgba(241,245,249,0.7)":"rgba(241,245,249,0.42)"} fontFamily="'JetBrains Mono',monospace">{n.ip}</text>
+        {n.mac&&<text x={n.x} y={n.y+59} textAnchor="middle" fontSize="7.5" fill="rgba(241,245,249,0.26)" fontFamily="'JetBrains Mono',monospace">{n.mac.slice(0,17)}</text>}
+      </g>
+    );
+  }
+
   return (
     <div className="osi-topo-wrap">
       <p className="osi-topo-hint">↑ Click any device to inspect its internal tables and boot log</p>
-      <svg viewBox="0 0 900 162" className="osi-topo-svg">
-        <rect x="6"   y="18" width="344" height="122" rx="12" fill="rgba(99,179,237,0.05)" stroke="rgba(99,179,237,0.2)" strokeWidth="1"/>
+      <svg viewBox={`0 0 900 ${svgHeight}`} className="osi-topo-svg">
+        <rect x="6"   y="18" width="344" height={lanAHeight} rx="12" fill="rgba(99,179,237,0.05)" stroke="rgba(99,179,237,0.2)" strokeWidth="1"/>
         <text x="16"  y="31" fontSize="9" fill="#63b3ed" fontFamily="'JetBrains Mono',monospace" fontWeight="600" letterSpacing="0.4">{lanALabel}</text>
         {vlanEnabled && <rect x="12" y="34" width="88" height="10" rx="3" fill="rgba(99,179,237,0.15)" stroke="rgba(99,179,237,0.4)" strokeWidth="0.5"/>}
         {vlanEnabled && <text x="56" y="41" fontSize="7" fill="#63b3ed" textAnchor="middle" fontFamily="'JetBrains Mono',monospace" fontWeight="700">VLAN {lanA.vlan}</text>}
-        <rect x="550" y="18" width="344" height="122" rx="12" fill="rgba(66,217,184,0.05)" stroke="rgba(66,217,184,0.2)" strokeWidth="1"/>
+        <rect x="550" y="18" width="344" height={lanBHeight} rx="12" fill="rgba(66,217,184,0.05)" stroke="rgba(66,217,184,0.2)" strokeWidth="1"/>
         <text x="560" y="31" fontSize="9" fill="#42d9b8" fontFamily="'JetBrains Mono',monospace" fontWeight="600" letterSpacing="0.4">{lanBLabel}</text>
         {vlanEnabled && <rect x="556" y="34" width="88" height="10" rx="3" fill="rgba(66,217,184,0.15)" stroke="rgba(66,217,184,0.4)" strokeWidth="0.5"/>}
         {vlanEnabled && <text x="600" y="41" fontSize="7" fill="#42d9b8" textAnchor="middle" fontFamily="'JetBrains Mono',monospace" fontWeight="700">VLAN {lanB.vlan}</text>}
         <rect x="378" y="30" width="134" height="100" rx="10" fill="rgba(251,146,60,0.05)" stroke="rgba(251,146,60,0.25)" strokeWidth="1"/>
         <line x1="85" y1="78" x2="815" y2="78" stroke="rgba(255,255,255,0.1)" strokeWidth="2"/>
-        {nodes.map(n => {
-          const active = isActive(n.key), selected = isSelected(n.key);
-          const c   = selected?"#f2c36b":active?"#42d9b8":"rgba(255,255,255,0.28)";
-          const bg  = selected?"rgba(242,195,107,0.14)":active?"rgba(66,217,184,0.14)":"rgba(13,19,30,0.95)";
-          const sw  = selected||active?2.5:1;
-          return (
-            <g key={n.key} style={{cursor:"pointer"}} onClick={()=>onSelectDevice(selected?null:n.key)}>
-              {selected&&<circle cx={n.x} cy={78} r={35} fill="none" stroke="rgba(242,195,107,0.35)" strokeWidth="1.5" strokeDasharray="4 3"/>}
-              <circle cx={n.x} cy={78} r={28} fill={bg} stroke={c} strokeWidth={sw}/>
-              {n.shape==="pc"&&<>
-                <rect x={n.x-11} y={64} width={22} height={15} rx={2} fill="none" stroke={c} strokeWidth={1.5}/>
-                <line x1={n.x-7} y1={79} x2={n.x+7} y2={79} stroke={c} strokeWidth={1.5}/>
-                <line x1={n.x-5} y1={82} x2={n.x+5} y2={82} stroke={c} strokeWidth={1}/>
-              </>}
-              {n.shape==="rt"&&<polygon points={`${n.x},51 ${n.x+18},78 ${n.x},105 ${n.x-18},78`} fill="none" stroke={c} strokeWidth={1.5}/>}
-              {n.shape==="sw"&&<>
-                <rect x={n.x-14} y={67} width={28} height={19} rx={2} fill="none" stroke={c} strokeWidth={1.5}/>
-                {[-8,-2,4,10].map(dx=><line key={dx} x1={n.x+dx} y1={67} x2={n.x+dx} y2={61} stroke={c} strokeWidth={1}/>)}
-              </>}
-              <text x={n.x} y={114} textAnchor="middle" fontSize="10" fontWeight={active||selected?"700":"500"} fill={selected?"#f2c36b":active?"#42d9b8":"rgba(241,245,249,0.8)"} fontFamily="Inter,sans-serif">{n.label}</text>
-              <text x={n.x} y={126} textAnchor="middle" fontSize="8" fill={active||selected?"rgba(241,245,249,0.7)":"rgba(241,245,249,0.42)"} fontFamily="'JetBrains Mono',monospace">{n.ip}</text>
-              {n.mac&&<text x={n.x} y={137} textAnchor="middle" fontSize="7.5" fill="rgba(241,245,249,0.26)" fontFamily="'JetBrains Mono',monospace">{n.mac.slice(0,17)}</text>}
-            </g>
-          );
-        })}
+        {extraNodesA.map(n=><line key={n.key} x1="255" y1="78" x2={n.x} y2={n.y} stroke="rgba(99,179,237,0.3)" strokeWidth="1.5" strokeDasharray="4 3"/>)}
+        {extraNodesB.map(n=><line key={n.key} x1="635" y1="78" x2={n.x} y2={n.y} stroke="rgba(66,217,184,0.3)" strokeWidth="1.5" strokeDasharray="4 3"/>)}
+        {allNodes.map(n=><NodeG key={n.key} n={n}/>)}
         <g style={{transform:`translateX(${dotX-85}px)`,transition:"transform 0.5s ease-in-out"}}>
           <circle cx={85} cy={78} r={14} fill="rgba(66,217,184,0.12)"/>
           <circle cx={85} cy={78} r={8}  fill="rgba(66,217,184,0.35)"/>
@@ -649,12 +707,12 @@ function DeviceInspector({ deviceKey, si, cfg, DEVICES, bootLogs, onClose }) {
       {tab==="bootlog" && <BootLogTab deviceKey={deviceKey} si={si} bootLogs={bootLogs}/>}
 
       {tab==="tables" && <div className="osi-di-body">
-        {/* PC-A */}
-        {deviceKey==="A"&&<>
+        {/* LAN-A PCs */}
+        {cfg.pcsA.some(p=>p.key===deviceKey)&&<>
           <div className="osi-di-col">
             <div className="osi-di-section">Network Configuration</div>
             {cfgA
-              ? <DiTable cols={["Parameter","Value"]} rows={DEVICES.A.rows.map(r=>[r.k,r.v])} empty=""/>
+              ? <DiTable cols={["Parameter","Value"]} rows={(DEVICES[deviceKey]?.rows||[]).map(r=>[r.k,r.v])} empty=""/>
               : <p className="osi-di-empty">Not yet configured — DHCP has not completed</p>}
           </div>
           <div className="osi-di-col">
@@ -664,12 +722,12 @@ function DeviceInspector({ deviceKey, si, cfg, DEVICES, bootLogs, onClose }) {
             <DiTable cols={["Destination","Next Hop","Interface","Type"]} rows={getPcRoutes("A",si,cfg).map(r=>[r.dst,r.nh,r.iface,r.type])} empty="No routes — waiting for DHCP"/>
           </div>
         </>}
-        {/* PC-B */}
-        {deviceKey==="B"&&<>
+        {/* LAN-B PCs */}
+        {cfg.pcsB.some(p=>p.key===deviceKey)&&<>
           <div className="osi-di-col">
             <div className="osi-di-section">Network Configuration</div>
             {cfgB
-              ? <DiTable cols={["Parameter","Value"]} rows={DEVICES.B.rows.map(r=>[r.k,r.v])} empty=""/>
+              ? <DiTable cols={["Parameter","Value"]} rows={(DEVICES[deviceKey]?.rows||[]).map(r=>[r.k,r.v])} empty=""/>
               : <p className="osi-di-empty">Not yet configured — DHCP has not completed</p>}
           </div>
           <div className="osi-di-col">
