@@ -41,29 +41,53 @@ const HM = {
 const ROUTER_AFTER = new Set(["router_fwd","transit_b","pcb_l1","pcb_l2","pcb_l3","pcb_l4","pcb_l5","pcb_l6","pcb_l7","done"]);
 
 const DEFAULT_INPUT = {
-  lanA: { cidr:"192.168.1.0/24", pcHost:10, vlanId:10 },
-  lanB: { cidr:"192.168.2.0/24", pcHost:20, vlanId:20 },
-  vlanEnabled: false, gatewayMode:"first",
+  lanA: { cidr:"192.168.1.0/24", gatewayIp:"192.168.1.1", pcAIp:"192.168.1.10", vlanId:10 },
+  lanB: { cidr:"192.168.2.0/24", gatewayIp:"192.168.2.1", pcBIp:"192.168.2.20", vlanId:20 },
+  vlanEnabled: false,
 };
+
+// ── Validate a single IP against a subnet ─────────────────────────────────────
+function validateIp(ipStr, si, ...otherIps) {
+  if (!ipStr || !ipStr.match(/^\d{1,3}(\.\d{1,3}){3}$/))
+    return { ok:false, msg:"Enter a valid IP (e.g. 192.168.1.1)" };
+  const parts = ipStr.split(".").map(Number);
+  if (parts.some(p=>p<0||p>255))
+    return { ok:false, msg:"Each octet must be 0–255" };
+  if (!si) return { ok:false, msg:"Fix the CIDR first" };
+  const ipN  = ipToNum(ipStr);
+  const netN = ipToNum(si.network);
+  const bcN  = ipToNum(si.broadcast);
+  if (ipN === netN) return { ok:false, msg:`${si.network} is the network address` };
+  if (ipN === bcN)  return { ok:false, msg:`${si.broadcast} is the broadcast address` };
+  if (ipN < netN || ipN > bcN) return { ok:false, msg:`Not in ${si.network}/${si.cidr}` };
+  for (const other of otherIps) {
+    if (other && ipStr === other) return { ok:false, msg:"Same IP as another device in this LAN" };
+  }
+  return { ok:true, msg:`In subnet · host ${ipN - netN}` };
+}
 
 // ── Build config from input ───────────────────────────────────────────────────
 function buildCfg(input) {
   const siA = parseCidr(input.lanA.cidr) || parseCidr("192.168.1.0/24");
   const siB = parseCidr(input.lanB.cidr) || parseCidr("192.168.2.0/24");
-  const gwA = input.gatewayMode==="last" ? siA.lastHost : siA.firstHost;
-  const gwB = input.gatewayMode==="last" ? siB.lastHost : siB.firstHost;
-  const hA  = Math.max(1, parseInt(input.lanA.pcHost)||10);
-  const hB  = Math.max(1, parseInt(input.lanB.pcHost)||20);
+  const vA  = validateIp(input.lanA.gatewayIp, siA);
+  const vB  = validateIp(input.lanB.gatewayIp, siB);
+  const gwA = vA.ok ? input.lanA.gatewayIp : siA.firstHost;
+  const gwB = vB.ok ? input.lanB.gatewayIp : siB.firstHost;
+  const vpA = validateIp(input.lanA.pcAIp, siA, gwA);
+  const vpB = validateIp(input.lanB.pcBIp, siB, gwB);
+  const pcAIp = vpA.ok ? input.lanA.pcAIp : numToIp(ipToNum(siA.network)+10);
+  const pcBIp = vpB.ok ? input.lanB.pcBIp : numToIp(ipToNum(siB.network)+20);
   const lanA = { ...siA, gateway:gwA,
-    dhcpStart: numToIp(ipToNum(siA.network)+10), dhcpEnd: siA.lastHost,
+    dhcpStart: numToIp(ipToNum(siA.network)+2), dhcpEnd: siA.lastHost,
     vlan: input.vlanEnabled ? (parseInt(input.lanA.vlanId)||10) : null };
   const lanB = { ...siB, gateway:gwB,
-    dhcpStart: numToIp(ipToNum(siB.network)+10), dhcpEnd: siB.lastHost,
+    dhcpStart: numToIp(ipToNum(siB.network)+2), dhcpEnd: siB.lastHost,
     vlan: input.vlanEnabled ? (parseInt(input.lanB.vlanId)||20) : null };
   return {
     lanA, lanB,
-    pcA:  { ip:numToIp(ipToNum(siA.network)+hA), mac:MACS.pcA, mask:siA.mask, cidr:siA.cidr, gw:gwA },
-    pcB:  { ip:numToIp(ipToNum(siB.network)+hB), mac:MACS.pcB, mask:siB.mask, cidr:siB.cidr, gw:gwB },
+    pcA:  { ip:pcAIp,  mac:MACS.pcA, mask:siA.mask, cidr:siA.cidr, gw:gwA },
+    pcB:  { ip:pcBIp,  mac:MACS.pcB, mask:siB.mask, cidr:siB.cidr, gw:gwB },
     router:{ lanAIp:gwA, lanAMac:MACS.rtrA, lanBIp:gwB, lanBMac:MACS.rtrB },
     vlanEnabled: input.vlanEnabled,
   };
@@ -405,24 +429,50 @@ function getPcRoutes(side, si, cfg) {
 }
 
 // ── Network Config Panel ──────────────────────────────────────────────────────
-function SubnetPreview({ cidrStr, hostNum, gatewayMode }) {
-  const si = parseCidr(cidrStr);
-  if (!si) return <span className="osi-cfg-err">Invalid CIDR format (e.g. 192.168.1.0/24)</span>;
-  if (si.cidr < 8 || si.cidr > 30) return <span className="osi-cfg-err">CIDR must be /8 to /30</span>;
-  const h = parseInt(hostNum) || 0;
-  const gwHost = gatewayMode==="last" ? si.totalHosts : 1;
-  const hostErr = h < 1 || h > si.totalHosts
-    ? `Host must be 1–${si.totalHosts}`
-    : h === gwHost
-    ? `Host ${h} is reserved for the gateway`
-    : null;
-  const pcIp = numToIp(ipToNum(si.network) + h);
+function IpField({ label, value, onChange, validation, placeholder }) {
   return (
-    <span className="osi-cfg-preview">
-      {si.mask} · {si.totalHosts} hosts · {si.firstHost}–{si.lastHost}
-      {!hostErr && <> · <strong>{pcIp}</strong></>}
-      {hostErr && <span className="osi-cfg-err"> · {hostErr}</span>}
-    </span>
+    <label className="osi-cfg-label">
+      {label}
+      <div className="osi-cfg-iprow">
+        <input className={`osi-cfg-input${validation && !validation.ok ? " osi-cfg-input-err" : ""}`}
+          value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder}/>
+        {validation && (
+          <span className={`osi-cfg-ipstatus ${validation.ok?"osi-cfg-ipok":"osi-cfg-iperr"}`}>
+            {validation.ok ? "✓" : "✗"} {validation.msg}
+          </span>
+        )}
+      </div>
+    </label>
+  );
+}
+
+function LanBlock({ title, color, cidr, onCidr, gatewayIp, onGateway, pcIp, onPc, pcLabel, vlanEnabled, vlanId, onVlanId, si }) {
+  const vGw = si ? validateIp(gatewayIp, si)                 : null;
+  const vPc = si ? validateIp(pcIp, si, gatewayIp)          : null;
+  return (
+    <div className="osi-cfg-lan">
+      <div className="osi-cfg-lanhead" style={{color}}>{title}</div>
+
+      <label className="osi-cfg-label">Network / CIDR
+        <input className="osi-cfg-input" value={cidr} onChange={e=>onCidr(e.target.value)} placeholder="192.168.1.0/24"/>
+        {si
+          ? <span className="osi-cfg-preview">{si.mask} · {si.totalHosts} hosts · {si.firstHost}–{si.lastHost}</span>
+          : <span className="osi-cfg-err">Invalid CIDR (e.g. 192.168.1.0/24, /8–/30)</span>}
+      </label>
+
+      <IpField label="Router / Gateway IP" value={gatewayIp} onChange={onGateway}
+        placeholder={si?.firstHost||"192.168.1.1"} validation={si ? vGw : null}/>
+
+      <IpField label={`${pcLabel} IP`} value={pcIp} onChange={onPc}
+        placeholder={si ? numToIp(ipToNum(si.network)+10) : "192.168.1.10"} validation={si ? vPc : null}/>
+
+      {vlanEnabled && (
+        <label className="osi-cfg-label">VLAN ID
+          <input className="osi-cfg-input osi-cfg-short" type="number" min="1" max="4094"
+            value={vlanId} onChange={e=>onVlanId(e.target.value)}/>
+        </label>
+      )}
+    </div>
   );
 }
 
@@ -432,13 +482,11 @@ function NetworkConfigPanel({ draft, setDraft, onApply, onReset, onClose }) {
 
   const siA = parseCidr(draft.lanA.cidr);
   const siB = parseCidr(draft.lanB.cidr);
-  const hA  = parseInt(draft.lanA.pcHost)||0;
-  const hB  = parseInt(draft.lanB.pcHost)||0;
-  const gwHostA = draft.gatewayMode==="last" ? (siA?.totalHosts||0) : 1;
-  const gwHostB = draft.gatewayMode==="last" ? (siB?.totalHosts||0) : 1;
-  const errA = !siA || siA.cidr<8 || siA.cidr>30 || hA<1 || hA>(siA?.totalHosts||0) || hA===gwHostA;
-  const errB = !siB || siB.cidr<8 || siB.cidr>30 || hB<1 || hB>(siB?.totalHosts||0) || hB===gwHostB;
-  const canApply = !errA && !errB;
+  const vGwA = siA ? validateIp(draft.lanA.gatewayIp, siA) : null;
+  const vGwB = siB ? validateIp(draft.lanB.gatewayIp, siB) : null;
+  const vPcA = siA ? validateIp(draft.lanA.pcAIp, siA, draft.lanA.gatewayIp) : null;
+  const vPcB = siB ? validateIp(draft.lanB.pcBIp, siB, draft.lanB.gatewayIp) : null;
+  const canApply = siA && siB && vGwA?.ok && vGwB?.ok && vPcA?.ok && vPcB?.ok;
 
   return (
     <div className="osi-cfg-panel">
@@ -447,44 +495,18 @@ function NetworkConfigPanel({ draft, setDraft, onApply, onReset, onClose }) {
         <button className="osi-cfg-close" onClick={onClose}>✕</button>
       </div>
       <div className="osi-cfg-grid">
-        {/* LAN-A */}
-        <div className="osi-cfg-lan">
-          <div className="osi-cfg-lanhead" style={{color:"#63b3ed"}}>LAN-A</div>
-          <label className="osi-cfg-label">Network / CIDR
-            <input className="osi-cfg-input" value={draft.lanA.cidr}
-              onChange={e=>setLanA("cidr",e.target.value)} placeholder="192.168.1.0/24"/>
-            <SubnetPreview cidrStr={draft.lanA.cidr} hostNum={draft.lanA.pcHost} gatewayMode={draft.gatewayMode}/>
-          </label>
-          <label className="osi-cfg-label">PC-A host offset
-            <input className="osi-cfg-input osi-cfg-short" type="number" min="1" max="254"
-              value={draft.lanA.pcHost} onChange={e=>setLanA("pcHost",e.target.value)}/>
-          </label>
-          {draft.vlanEnabled && (
-            <label className="osi-cfg-label">VLAN ID
-              <input className="osi-cfg-input osi-cfg-short" type="number" min="1" max="4094"
-                value={draft.lanA.vlanId} onChange={e=>setLanA("vlanId",e.target.value)}/>
-            </label>
-          )}
-        </div>
-        {/* LAN-B */}
-        <div className="osi-cfg-lan">
-          <div className="osi-cfg-lanhead" style={{color:"#42d9b8"}}>LAN-B</div>
-          <label className="osi-cfg-label">Network / CIDR
-            <input className="osi-cfg-input" value={draft.lanB.cidr}
-              onChange={e=>setLanB("cidr",e.target.value)} placeholder="192.168.2.0/24"/>
-            <SubnetPreview cidrStr={draft.lanB.cidr} hostNum={draft.lanB.pcHost} gatewayMode={draft.gatewayMode}/>
-          </label>
-          <label className="osi-cfg-label">PC-B host offset
-            <input className="osi-cfg-input osi-cfg-short" type="number" min="1" max="254"
-              value={draft.lanB.pcHost} onChange={e=>setLanB("pcHost",e.target.value)}/>
-          </label>
-          {draft.vlanEnabled && (
-            <label className="osi-cfg-label">VLAN ID
-              <input className="osi-cfg-input osi-cfg-short" type="number" min="1" max="4094"
-                value={draft.lanB.vlanId} onChange={e=>setLanB("vlanId",e.target.value)}/>
-            </label>
-          )}
-        </div>
+        <LanBlock title="LAN-A" color="#63b3ed" si={siA}
+          cidr={draft.lanA.cidr}       onCidr={v=>setLanA("cidr",v)}
+          gatewayIp={draft.lanA.gatewayIp} onGateway={v=>setLanA("gatewayIp",v)}
+          pcIp={draft.lanA.pcAIp}      onPc={v=>setLanA("pcAIp",v)}
+          pcLabel="PC-A"
+          vlanEnabled={draft.vlanEnabled} vlanId={draft.lanA.vlanId} onVlanId={v=>setLanA("vlanId",v)}/>
+        <LanBlock title="LAN-B" color="#42d9b8" si={siB}
+          cidr={draft.lanB.cidr}       onCidr={v=>setLanB("cidr",v)}
+          gatewayIp={draft.lanB.gatewayIp} onGateway={v=>setLanB("gatewayIp",v)}
+          pcIp={draft.lanB.pcBIp}      onPc={v=>setLanB("pcBIp",v)}
+          pcLabel="PC-B"
+          vlanEnabled={draft.vlanEnabled} vlanId={draft.lanB.vlanId} onVlanId={v=>setLanB("vlanId",v)}/>
       </div>
       <div className="osi-cfg-opts">
         <label className="osi-cfg-toggle">
@@ -493,23 +515,12 @@ function NetworkConfigPanel({ draft, setDraft, onApply, onReset, onClose }) {
           <span>Enable 802.1Q VLANs</span>
           {draft.vlanEnabled && <span className="osi-cfg-vlan-badge">VLAN</span>}
         </label>
-        <div className="osi-cfg-gw">
-          <span>Gateway:</span>
-          {["first","last"].map(m=>(
-            <label key={m} className="osi-cfg-radio">
-              <input type="radio" name="gwmode" value={m}
-                checked={draft.gatewayMode===m}
-                onChange={()=>setDraft(d=>({...d,gatewayMode:m}))}/>
-              {m} host
-            </label>
-          ))}
-        </div>
       </div>
       <div className="osi-cfg-actions">
         <button className="osi-cfg-apply" disabled={!canApply} onClick={onApply}>Apply — restart simulation</button>
         <button className="osi-cfg-reset" onClick={onReset}>Reset to default</button>
       </div>
-      {!canApply && <p className="osi-cfg-warn">Fix validation errors above before applying.</p>}
+      {!canApply && <p className="osi-cfg-warn">Fix the highlighted errors above before applying.</p>}
     </div>
   );
 }
