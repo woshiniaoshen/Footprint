@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useMemo, useState } from "react";
 
 const INTERNAL_PREFIXES = ["192.168.", "10.", "172.16.", "172.17.", "172.18.", "172.19.", "172.20.", "172.21.", "172.22.", "172.23.", "172.24.", "172.25.", "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31."];
 const isInternal = (ip) => ip !== "—" && INTERNAL_PREFIXES.some(p => ip.startsWith(p));
@@ -205,15 +205,20 @@ export default function NetworkGraph({ packets }) {
 
   const graph = useMemo(() => buildGraph(packets), [packets]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !graph.nodes.length) return;
 
-    const { width, height } = canvas.getBoundingClientRect();
-    canvas.width = width * window.devicePixelRatio;
-    canvas.height = height * window.devicePixelRatio;
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    const width = rect.width || canvas.offsetWidth || 600;
+    const height = rect.height || canvas.offsetHeight || 400;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = width + "px";
+    canvas.style.height = height + "px";
     const ctx = canvas.getContext("2d");
-    ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+    ctx.scale(dpr, dpr);
 
     const nodes = graph.nodes.map(n => ({ ...n }));
     const edges = graph.edges.map(e => ({ ...e, dots: [] }));
