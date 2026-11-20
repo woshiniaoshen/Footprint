@@ -51,8 +51,9 @@ body { background: var(--bg); color: var(--text); font-family: 'Inter', sans-ser
 /* ── Topology ── */
 .osi-topo-wrap {
   background: var(--panel); border: 1px solid var(--line);
-  border-radius: 14px; padding: 10px 16px;
+  border-radius: 14px; padding: 10px 16px 6px;
 }
+.osi-topo-hint { font-size: 10px; color: var(--quiet); text-align: center; margin-bottom: 4px; letter-spacing: 0.2px; }
 .osi-topo-svg { width: 100%; height: auto; display: block; overflow: visible; }
 
 /* ── Middle section: PC-A | Inspector | PC-B ── */
@@ -243,10 +244,11 @@ body { background: var(--bg); color: var(--text); font-family: 'Inter', sans-ser
   background: rgba(255,255,255,0.08); border-radius: 20px; color: var(--muted);
 }
 .osi-sbadge { font-size: 10px; font-weight: 700; padding: 3px 9px; border-radius: 20px; }
-.osi-sbadge-a { background: rgba(167,139,250,0.15); color: #a78bfa; border: 1px solid rgba(167,139,250,0.3); }
-.osi-sbadge-b { background: rgba(66,217,184,0.15);  color: #42d9b8; border: 1px solid rgba(66,217,184,0.3); }
-.osi-sbadge-r { background: rgba(251,146,60,0.15);  color: #fb923c; border: 1px solid rgba(251,146,60,0.3); }
-.osi-sbadge-t { background: rgba(99,179,237,0.15);  color: #63b3ed; border: 1px solid rgba(99,179,237,0.3); }
+.osi-sbadge-a    { background: rgba(167,139,250,0.15); color: #a78bfa; border: 1px solid rgba(167,139,250,0.3); }
+.osi-sbadge-b    { background: rgba(66,217,184,0.15);  color: #42d9b8; border: 1px solid rgba(66,217,184,0.3); }
+.osi-sbadge-r    { background: rgba(251,146,60,0.15);  color: #fb923c; border: 1px solid rgba(251,146,60,0.3); }
+.osi-sbadge-t    { background: rgba(99,179,237,0.15);  color: #63b3ed; border: 1px solid rgba(99,179,237,0.3); }
+.osi-sbadge-boot { background: rgba(242,195,107,0.15); color: #f2c36b; border: 1px solid rgba(242,195,107,0.3); }
 
 .osi-info-title { font-size: 17px; font-weight: 700; }
 .osi-info-desc  { font-size: 13.5px; line-height: 1.65; color: rgba(241,245,249,0.85); }
@@ -316,6 +318,47 @@ body { background: var(--bg); color: var(--text); font-family: 'Inter', sans-ser
 .osi-ref-pdu   { font-size: 10.5px; font-family: 'JetBrains Mono', monospace; color: var(--muted); }
 .osi-ref-proto { font-size: 10.5px; color: var(--quiet); }
 
+/* ── Device Inspector (click on a topology node) ── */
+.osi-di {
+  background: var(--panel); border: 1px solid rgba(242,195,107,0.35);
+  border-radius: 14px; overflow: hidden;
+  box-shadow: 0 0 24px rgba(242,195,107,0.08);
+}
+.osi-di-hdr {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 18px; border-bottom: 1px solid var(--line);
+  background: rgba(242,195,107,0.06);
+}
+.osi-di-name  { font-size: 14px; font-weight: 700; color: #f2c36b; margin-right: 10px; }
+.osi-di-type  { font-size: 11px; color: var(--muted); }
+.osi-di-close {
+  background: rgba(255,255,255,0.07); border: 1px solid var(--line);
+  color: var(--muted); border-radius: 7px; padding: 5px 12px;
+  font-size: 12px; cursor: pointer; font-family: inherit; transition: all 0.15s;
+}
+.osi-di-close:hover { background: rgba(255,255,255,0.14); color: var(--text); }
+.osi-di-body  { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+.osi-di-col   { padding: 14px 18px; border-right: 1px solid var(--line); }
+.osi-di-col:last-child { border-right: none; }
+.osi-di-section {
+  font-size: 10px; font-weight: 700; color: #f2c36b; text-transform: uppercase;
+  letter-spacing: 0.6px; margin-bottom: 8px; padding-bottom: 5px;
+  border-bottom: 1px solid rgba(242,195,107,0.2);
+}
+.osi-di-empty { font-size: 11px; color: var(--quiet); padding: 8px 0; font-style: italic; }
+.osi-di-tbl   { width: 100%; border-collapse: collapse; font-size: 11px; font-family: 'JetBrains Mono', monospace; }
+.osi-di-tbl thead th {
+  text-align: left; padding: 3px 8px 5px 0;
+  color: var(--quiet); font-size: 9.5px; font-weight: 600;
+  border-bottom: 1px solid var(--line);
+}
+.osi-di-tbl tbody td {
+  padding: 4px 8px 4px 0; border-bottom: 1px solid rgba(255,255,255,0.03);
+  word-break: break-all;
+}
+.osi-di-tbl tbody td:first-child { color: var(--muted); white-space: nowrap; }
+.osi-di-tbl tbody td:nth-child(2) { color: #42d9b8; }
+
 /* ── Footer ── */
 .osi-footer {
   padding: 16px 28px; display: flex; justify-content: space-between; align-items: center;
@@ -332,6 +375,9 @@ body { background: var(--bg); color: var(--text); font-family: 'Inter', sans-ser
   .osi-mid { grid-template-columns: 1fr; }
   .osi-inspector { order: -1; }
   .osi-details { grid-template-columns: 1fr; }
+  .osi-di-body { grid-template-columns: 1fr; }
+  .osi-di-col { border-right: none; border-bottom: 1px solid var(--line); }
+  .osi-di-col:last-child { border-bottom: none; }
   .osi-ref-row { grid-template-columns: 26px 1fr 60px; }
   .osi-ref-proto { display: none; }
 }
