@@ -12,6 +12,8 @@ export default defineConfig({
       input: {
         portfolio: resolve('index.html'),
         footprint: resolve('footprint/index.html'),
+        netwatch: resolve('netwatch/index.html'),
+        wireshark: resolve('wireshark/index.html'),
       },
     },
   },

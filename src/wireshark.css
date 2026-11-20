@@ -1,0 +1,184 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0a0f1a;
+  --panel: #111827;
+  --line: rgba(255,255,255,0.1);
+  --text: #f1f5f9;
+  --muted: rgba(241,245,249,0.55);
+  --quiet: rgba(241,245,249,0.3);
+  --accent: #42d9b8;
+  --sky: #63b3ed;
+  --gold: #f2c36b;
+  --red: #e63946;
+}
+
+body { background: var(--bg); color: var(--text); font-family: 'Inter', sans-serif; }
+
+.ws-shell { min-height: 100vh; display: flex; flex-direction: column; }
+
+/* ── Header ── */
+.ws-header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; padding: 16px 28px;
+  background: var(--panel); border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.ws-header-brand { display: flex; align-items: center; gap: 12px; }
+.ws-header-brand h1 { font-size: 20px; font-weight: 800; }
+.ws-header-brand p { font-size: 11px; color: var(--muted); margin-top: 2px; letter-spacing: 0.5px; }
+.ws-header-right { display: flex; align-items: center; gap: 10px; }
+.ws-back, .ws-reset-btn {
+  color: var(--accent); text-decoration: none; font-size: 13px;
+  padding: 6px 12px; border: 1px solid rgba(66,217,184,0.3);
+  border-radius: 8px; transition: background 0.15s; background: none; cursor: pointer;
+}
+.ws-back:hover, .ws-reset-btn:hover { background: rgba(66,217,184,0.1); }
+
+/* ── Main ── */
+.ws-main {
+  flex: 1; padding: 24px 28px;
+  display: flex; flex-direction: column; gap: 20px;
+  max-width: 1400px; width: 100%; margin: 0 auto;
+}
+
+/* ── Intro ── */
+.ws-intro {
+  background: rgba(66,217,184,0.07);
+  border: 1px solid rgba(66,217,184,0.2);
+  border-radius: 12px; padding: 14px 18px;
+  font-size: 13px; color: var(--muted); line-height: 1.65;
+}
+.ws-intro strong { color: var(--text); }
+.ws-intro code { background: rgba(255,255,255,0.1); padding: 1px 5px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+
+/* ── Drop zone ── */
+.ws-drop {
+  border: 2px dashed rgba(66,217,184,0.3);
+  border-radius: 20px; padding: 52px 24px;
+  display: flex; flex-direction: column; align-items: center;
+  gap: 10px; cursor: pointer; transition: all 0.2s;
+  background: rgba(66,217,184,0.03); text-align: center;
+}
+.ws-drop:hover, .ws-drop-active {
+  border-color: var(--accent); background: rgba(66,217,184,0.07);
+}
+.ws-drop-icon { font-size: 48px; }
+.ws-drop-title { font-size: 18px; font-weight: 700; }
+.ws-drop-sub { font-size: 13px; color: var(--muted); }
+.ws-drop-sub strong { color: var(--accent); }
+.ws-drop-samples {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  margin-top: 10px; justify-content: center;
+  font-size: 12px; color: var(--muted);
+}
+.ws-drop-samples code {
+  background: rgba(255,255,255,0.08); padding: 4px 10px; border-radius: 6px;
+  font-family: 'JetBrains Mono', monospace; font-size: 11px;
+  border: 1px solid var(--line);
+}
+
+/* ── Loading ── */
+.ws-loading { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 60px; color: var(--muted); }
+.ws-spinner {
+  width: 36px; height: 36px; border-radius: 50%;
+  border: 3px solid rgba(66,217,184,0.2); border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Error ── */
+.ws-error { background: rgba(230,57,70,0.1); border: 1px solid rgba(230,57,70,0.3); border-radius: 10px; padding: 12px 16px; color: var(--red); font-size: 13px; }
+
+/* ── File banner ── */
+.ws-file-banner {
+  display: flex; align-items: flex-start; gap: 14px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px 20px;
+}
+.ws-file-icon { font-size: 28px; flex-shrink: 0; }
+.ws-file-banner strong { font-size: 15px; font-weight: 700; }
+.ws-summary-text { font-size: 13px; color: var(--muted); margin-top: 5px; line-height: 1.6; }
+
+/* ── Stats ── */
+.ws-stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+.ws-stat { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; }
+.ws-stat-value { font-size: 26px; font-weight: 800; color: var(--accent); line-height: 1; }
+.ws-stat-label { font-size: 11px; color: var(--muted); margin-top: 5px; }
+.ws-stat-sub { font-size: 11px; color: var(--quiet); margin-top: 2px; }
+
+/* ── Sections ── */
+.ws-section { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 20px; }
+.ws-section-flex { display: flex; flex-direction: column; }
+.ws-section-title { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 14px; }
+.ws-section-hint { font-weight: 400; opacity: 0.6; font-size: 11px; text-transform: none; letter-spacing: 0; }
+
+/* ── Alerts ── */
+.ws-alerts { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.ws-alert { background: rgba(230,57,70,0.07); border: 1px solid rgba(230,57,70,0.3); border-radius: 12px; padding: 14px 16px; }
+.ws-alert-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.ws-alert-type { font-weight: 700; font-size: 13px; }
+.ws-alert-sev { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 20px; text-transform: uppercase; }
+.ws-alert-sev[data-sev="critical"] { background: rgba(230,57,70,0.2); color: var(--red); border: 1px solid rgba(230,57,70,0.4); }
+.ws-alert-sev[data-sev="high"] { background: rgba(242,195,107,0.15); color: var(--gold); border: 1px solid rgba(242,195,107,0.3); }
+.ws-alert-ip { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--muted); margin-left: auto; }
+.ws-alert-detail { font-size: 12px; color: var(--muted); }
+
+/* ── Charts row ── */
+.ws-charts-row { display: grid; grid-template-columns: 1.5fr 1fr; gap: 16px; }
+.ws-charts-row-single { grid-template-columns: 1fr; }
+@media (max-width: 800px) { .ws-charts-row { grid-template-columns: 1fr; } }
+
+/* ── Timeline ── */
+.ws-timeline { display: flex; align-items: flex-end; gap: 3px; height: 100px; width: 100%; flex: 1; }
+.ws-tl-col { flex: 1; display: flex; align-items: flex-end; height: 100%; }
+.ws-tl-fill { width: 100%; background: var(--accent); border-radius: 3px 3px 0 0; min-height: 2px; }
+.ws-tl-axis { display: flex; justify-content: space-between; font-size: 10px; color: var(--quiet); margin-top: 4px; }
+
+/* ── Protocol bar ── */
+.ws-proto-bar { height: 12px; border-radius: 6px; overflow: hidden; display: flex; margin-bottom: 14px; }
+.ws-proto-segment { height: 100%; transition: width 0.4s; }
+.ws-proto-legend { display: flex; flex-direction: column; gap: 7px; }
+.ws-proto-legend-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.ws-proto-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.ws-proto-pct { margin-left: auto; color: var(--muted); min-width: 36px; text-align: right; }
+.ws-proto-count { color: var(--quiet); font-size: 11px; min-width: 42px; text-align: right; font-family: 'JetBrains Mono', monospace; }
+
+/* ── Top IPs ── */
+.ws-topips { display: flex; flex-direction: column; gap: 8px; }
+.ws-topip-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.ws-topip-label { font-family: 'JetBrains Mono', monospace; font-size: 11px; width: 112px; flex-shrink: 0; color: var(--muted); }
+.ws-topip-track { flex: 1; height: 6px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; }
+.ws-topip-fill { height: 100%; background: var(--sky); border-radius: 3px; }
+.ws-topip-count { font-size: 11px; color: var(--muted); width: 32px; text-align: right; font-family: 'JetBrains Mono', monospace; }
+
+/* ── Packet table ── */
+.ws-table-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+.ws-table-hint { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.ws-hint-red { color: var(--red); font-weight: 600; }
+.ws-filters { display: flex; gap: 6px; flex-wrap: wrap; }
+.ws-filter-btn { background: rgba(255,255,255,0.06); border: 1px solid var(--line); color: var(--muted); border-radius: 8px; padding: 5px 11px; font-size: 12px; cursor: pointer; transition: all 0.15s; }
+.ws-filter-btn:hover { background: rgba(255,255,255,0.1); color: var(--text); }
+.ws-filter-btn.active { background: rgba(66,217,184,0.15); border-color: rgba(66,217,184,0.4); color: var(--accent); }
+.ws-table-wrap { overflow-x: auto; border-radius: 10px; border: 1px solid var(--line); }
+.ws-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ws-table th { background: rgba(255,255,255,0.05); padding: 10px 12px; text-align: left; font-size: 10px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; white-space: nowrap; }
+.ws-table td { padding: 8px 12px; border-top: 1px solid rgba(255,255,255,0.05); white-space: nowrap; }
+.ws-table tbody tr:hover { background: rgba(255,255,255,0.03); }
+.ws-row-suspect td { color: rgba(230,57,70,0.85); }
+.ws-row-suspect { background: rgba(230,57,70,0.04) !important; }
+.ws-mono { font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+.ws-muted { color: var(--muted); }
+.ws-proto-tag { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 5px; border: 1px solid; }
+.ws-pagination { display: flex; align-items: center; gap: 14px; justify-content: center; margin-top: 14px; font-size: 13px; color: var(--muted); }
+.ws-page-btn { background: rgba(255,255,255,0.06); border: 1px solid var(--line); color: var(--text); padding: 7px 14px; border-radius: 8px; cursor: pointer; font-size: 12px; transition: background 0.15s; }
+.ws-page-btn:hover:not(:disabled) { background: rgba(255,255,255,0.1); }
+.ws-page-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* ── Footer ── */
+.ws-footer { padding: 18px 28px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+.ws-footer a { color: var(--accent); text-decoration: none; }
+.ws-footer a:hover { text-decoration: underline; }
+
+@media (max-width: 600px) { .ws-main { padding: 16px; } .ws-header { padding: 14px 16px; } }

@@ -116,6 +116,74 @@ export default function Portfolio() {
           </div>
         </article>
 
+        <article className="project-feature project-feature-secondary">
+          <a className="project-visual" href="/netwatch/" aria-label="Open NetWatch dashboard">
+            <div style={{ width: "100%", height: "100%", background: "linear-gradient(135deg, #0a0f1a 0%, #111827 60%, #0d1f2d 100%)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <svg width="80" height="80" viewBox="0 0 64 64" fill="none">
+                <rect width="64" height="64" rx="14" fill="#111827" />
+                <circle cx="32" cy="32" r="18" stroke="#42d9b8" strokeWidth="2.5" fill="none" />
+                <circle cx="32" cy="32" r="10" stroke="#63b3ed" strokeWidth="2" fill="none" />
+                <circle cx="32" cy="32" r="3" fill="#e63946" />
+                <line x1="32" y1="6" x2="32" y2="14" stroke="#42d9b8" strokeWidth="2" strokeLinecap="round" />
+                <line x1="32" y1="50" x2="32" y2="58" stroke="#42d9b8" strokeWidth="2" strokeLinecap="round" />
+                <line x1="6" y1="32" x2="14" y2="32" stroke="#42d9b8" strokeWidth="2" strokeLinecap="round" />
+                <line x1="50" y1="32" x2="58" y2="32" stroke="#42d9b8" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+            </div>
+          </a>
+          <div className="project-copy">
+            <p className="project-number">03 · Security project</p>
+            <h3>NetWatch</h3>
+            <p>
+              A network intrusion detection dashboard that simulates real traffic logs, detects
+              port scans, brute-force attempts, and data exfiltration, and visualises threats in real time.
+            </p>
+            <ul>
+              <li>React frontend with live detection rules</li>
+              <li>Simulated TCP/UDP event log with 600+ entries</li>
+              <li>Traffic volume chart, protocol split, and top-IP ranking</li>
+              <li>Threat severity alerts with per-IP flagging</li>
+            </ul>
+            <div className="project-actions">
+              <a className="primary-link" href="/netwatch/">Launch NetWatch</a>
+            </div>
+          </div>
+        </article>
+
+        <article className="project-feature project-feature-secondary">
+          <a className="project-visual" href="/wireshark/" aria-label="Open Wireshark Companion">
+            <div style={{ width: "100%", height: "100%", background: "linear-gradient(135deg, #0a0f1a 0%, #111827 60%, #0d1f2d 100%)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <svg width="80" height="80" viewBox="0 0 64 64" fill="none">
+                <rect width="64" height="64" rx="14" fill="#111827" />
+                <rect x="10" y="20" width="44" height="6" rx="3" fill="#42d9b8" opacity="0.9" />
+                <rect x="10" y="30" width="30" height="6" rx="3" fill="#63b3ed" opacity="0.8" />
+                <rect x="10" y="40" width="38" height="6" rx="3" fill="#f2c36b" opacity="0.8" />
+                <circle cx="50" cy="23" r="4" fill="#42d9b8" />
+                <circle cx="36" cy="33" r="4" fill="#63b3ed" />
+                <circle cx="44" cy="43" r="4" fill="#f2c36b" />
+              </svg>
+            </div>
+          </a>
+          <div className="project-copy">
+            <p className="project-number">04 · Security tool</p>
+            <h3>Wireshark Companion</h3>
+            <p>
+              Drop a <code>.pcap</code> or <code>.pcapng</code> file and get an instant visual breakdown —
+              protocol split, traffic timeline, top IPs, and every packet in a searchable table.
+              Parses binary data entirely in the browser with no upload.
+            </p>
+            <ul>
+              <li>Custom binary parser for .pcap and .pcapng formats</li>
+              <li>Decodes Ethernet, IP, TCP, and UDP headers from raw bytes</li>
+              <li>Auto-generates a plain-English capture summary</li>
+              <li>Applies NetWatch threat detection rules on real captures</li>
+            </ul>
+            <div className="project-actions">
+              <a className="primary-link" href="/wireshark/">Launch Companion</a>
+            </div>
+          </div>
+        </article>
+
         <a className="github-band" href="https://github.com/woshiniaoshen" target="_blank" rel="noreferrer">
           <span>More experiments and coursework</span>
           <strong>Browse all projects on GitHub</strong>
