@@ -184,6 +184,36 @@ export default function Portfolio() {
           </div>
         </article>
 
+        <article className="project-feature project-feature-secondary">
+          <a className="project-visual" href="/osi/" aria-label="Open OSI Layer Explorer">
+            <div style={{ width:"100%", height:"100%", background:"linear-gradient(135deg,#0a0f1a 0%,#111827 60%,#0d1f2d 100%)", display:"flex", alignItems:"center", justifyContent:"center" }}>
+              <svg width="80" height="80" viewBox="0 0 64 64" fill="none">
+                <rect width="64" height="64" rx="14" fill="#111827"/>
+                {[["#a78bfa",7],["#63b3ed",18],["#42d9b8",29],["#f2c36b",40],["#fb923c",51]].map(([c,y]) => (
+                  <rect key={y} x="8" y={y} width="48" height="7" rx="3" fill={c} opacity="0.85"/>
+                ))}
+              </svg>
+            </div>
+          </a>
+          <div className="project-copy">
+            <p className="project-number">05 · Learning tool</p>
+            <h3>OSI Layer Explorer</h3>
+            <p>
+              An interactive step-by-step walkthrough of how a network packet travels from one PC,
+              through every OSI layer, across two LANs via a router, and arrives at another PC.
+            </p>
+            <ul>
+              <li>20-step animated journey through all 7 OSI layers</li>
+              <li>Shows encapsulation and decapsulation header-by-header</li>
+              <li>Explains the router's Layer 2 / Layer 3 boundary role</li>
+              <li>Keyboard navigation and auto-play mode</li>
+            </ul>
+            <div className="project-actions">
+              <a className="primary-link" href="/osi/">Launch Explorer</a>
+            </div>
+          </div>
+        </article>
+
         <a className="github-band" href="https://github.com/woshiniaoshen" target="_blank" rel="noreferrer">
           <span>More experiments and coursework</span>
           <strong>Browse all projects on GitHub</strong>

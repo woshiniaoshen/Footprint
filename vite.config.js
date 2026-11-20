@@ -14,6 +14,7 @@ export default defineConfig({
         footprint: resolve('footprint/index.html'),
         netwatch: resolve('netwatch/index.html'),
         wireshark: resolve('wireshark/index.html'),
+        osi: resolve('osi/index.html'),
       },
     },
   },
