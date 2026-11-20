@@ -573,10 +573,11 @@ function TopologyDiagram({ pos, activeSide, selectedDevice, onSelectDevice, cfg 
   const {pcA:a, pcB:b, router:r, lanA, lanB, vlanEnabled, pcsA, pcsB} = cfg;
   const nExtraA = pcsA.length - 1;
   const nExtraB = pcsB.length - 1;
-  const maxExtra = Math.max(nExtraA, nExtraB);
-  const svgHeight = 162 + maxExtra * 60;
-  const lanAHeight = 122 + nExtraA * 60;
-  const lanBHeight = 122 + nExtraB * 60;
+  const ROW2_Y = 190;
+  const anyExtra = nExtraA > 0 || nExtraB > 0;
+  const svgHeight = anyExtra ? 272 : 162;
+  const lanAHeight = nExtraA > 0 ? 240 : 122;
+  const lanBHeight = nExtraB > 0 ? 240 : 122;
 
   const mainNodes = [
     {x:85,  y:78, label:a.name,  ip:a.ip,  mac:a.mac,  key:"A",       shape:"pc"},
@@ -585,8 +586,10 @@ function TopologyDiagram({ pos, activeSide, selectedDevice, onSelectDevice, cfg 
     {x:635, y:78, label:"Switch",ip:"No IP  (L2)", mac:"", key:"switchB", shape:"sw"},
     {x:815, y:78, label:b.name,  ip:b.ip,  mac:b.mac,  key:"B",       shape:"pc"},
   ];
-  const extraNodesA = pcsA.slice(1).map((pc, i) => ({x:85,  y:78+(i+1)*60, label:pc.name, ip:pc.ip, mac:pc.mac, key:pc.key, shape:"pc"}));
-  const extraNodesB = pcsB.slice(1).map((pc, i) => ({x:815, y:78+(i+1)*60, label:pc.name, ip:pc.ip, mac:pc.mac, key:pc.key, shape:"pc"}));
+  const ROW2_XA = [85, 175, 265];
+  const ROW2_XB = [815, 725, 635];
+  const extraNodesA = pcsA.slice(1).map((pc, i) => ({x:ROW2_XA[i], y:ROW2_Y, label:pc.name, ip:pc.ip, mac:pc.mac, key:pc.key, shape:"pc"}));
+  const extraNodesB = pcsB.slice(1).map((pc, i) => ({x:ROW2_XB[i], y:ROW2_Y, label:pc.name, ip:pc.ip, mac:pc.mac, key:pc.key, shape:"pc"}));
   const allNodes = [...mainNodes, ...extraNodesA, ...extraNodesB];
 
   const isActive   = k => activeSide===k||(activeSide==="transit_a"&&k==="switchA")||(activeSide==="transit_b"&&k==="switchB");
@@ -635,8 +638,10 @@ function TopologyDiagram({ pos, activeSide, selectedDevice, onSelectDevice, cfg 
         {vlanEnabled && <text x="600" y="41" fontSize="7" fill="#42d9b8" textAnchor="middle" fontFamily="'JetBrains Mono',monospace" fontWeight="700">VLAN {lanB.vlan}</text>}
         <rect x="378" y="30" width="134" height="100" rx="10" fill="rgba(251,146,60,0.05)" stroke="rgba(251,146,60,0.25)" strokeWidth="1"/>
         <line x1="85" y1="78" x2="815" y2="78" stroke="rgba(255,255,255,0.1)" strokeWidth="2"/>
-        {extraNodesA.map(n=><line key={n.key} x1="255" y1="78" x2={n.x} y2={n.y} stroke="rgba(99,179,237,0.3)" strokeWidth="1.5" strokeDasharray="4 3"/>)}
-        {extraNodesB.map(n=><line key={n.key} x1="635" y1="78" x2={n.x} y2={n.y} stroke="rgba(66,217,184,0.3)" strokeWidth="1.5" strokeDasharray="4 3"/>)}
+        {nExtraA>0 && <path fill="none" stroke="rgba(99,179,237,0.35)" strokeWidth="1.5" strokeDasharray="4 3"
+          d={`M275 98 L300 123 L300 152 L${Math.min(...extraNodesA.map(n=>n.x))} 152 ${extraNodesA.map(n=>`M${n.x} 152 L${n.x} 162`).join(" ")}`}/>}
+        {nExtraB>0 && <path fill="none" stroke="rgba(66,217,184,0.35)" strokeWidth="1.5" strokeDasharray="4 3"
+          d={`M615 98 L590 123 L590 152 L${Math.max(...extraNodesB.map(n=>n.x))} 152 ${extraNodesB.map(n=>`M${n.x} 152 L${n.x} 162`).join(" ")}`}/>}
         {allNodes.map(n=><NodeG key={n.key} n={n}/>)}
         <g style={{transform:`translateX(${dotX-85}px)`,transition:"transform 0.5s ease-in-out"}}>
           <circle cx={85} cy={78} r={14} fill="rgba(66,217,184,0.12)"/>
