@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useCallback } from "react";
 import { parseFile, summariseCapture } from "./pcap-parser.js";
 import { detectThreats } from "./netwatch-logs.js";
+import NetworkGraph from "./NetworkGraph.jsx";
 import "./wireshark.css";
 
 const PROTO_COLORS = {
@@ -225,6 +226,7 @@ export default function WiresharkCompanion() {
   const [fileName, setFileName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [tab, setTab] = useState("dashboard");
 
   const threats = useMemo(() => packets ? detectThreats(packets) : [], [packets]);
   const summary = useMemo(() => packets ? summariseCapture(packets) : "", [packets]);
@@ -309,54 +311,74 @@ export default function WiresharkCompanion() {
               </div>
             </div>
 
-            <div className="ws-stats-row">
-              <StatCard label="Total Packets" value={packets.length.toLocaleString()} />
-              <StatCard label="Unique IPs" value={uniqueIps} />
-              <StatCard label="Duration" value={duration} />
-              <StatCard label="Data Captured" value={totalBytes > 1048576 ? `${(totalBytes / 1048576).toFixed(1)} MB` : `${(totalBytes / 1024).toFixed(0)} KB`} />
-              <StatCard label="Threats Found" value={threats.length} sub={threats.length > 0 ? threats.map(t => t.type).join(", ") : "none"} />
+            <div className="ws-tabs">
+              <button className={`ws-tab ${tab === "dashboard" ? "active" : ""}`} onClick={() => setTab("dashboard")}>
+                📊 Dashboard
+              </button>
+              <button className={`ws-tab ${tab === "network" ? "active" : ""}`} onClick={() => setTab("network")}>
+                🕸 Network Map
+              </button>
             </div>
 
-            {threats.length > 0 && (
-              <section className="ws-section">
-                <h2 className="ws-section-title">Threats Detected</h2>
-                <div className="ws-alerts">
-                  {threats.map((t, i) => (
-                    <div key={i} className="ws-alert">
-                      <div className="ws-alert-top">
-                        <span className="ws-alert-type">{t.type}</span>
-                        <span className="ws-alert-sev" data-sev={t.severity}>{t.severity}</span>
-                        <span className="ws-alert-ip">{t.src_ip}</span>
-                      </div>
-                      <p className="ws-alert-detail">{t.detail}</p>
-                    </div>
-                  ))}
+            {tab === "dashboard" && (
+              <>
+                <div className="ws-stats-row">
+                  <StatCard label="Total Packets" value={packets.length.toLocaleString()} />
+                  <StatCard label="Unique IPs" value={uniqueIps} />
+                  <StatCard label="Duration" value={duration} />
+                  <StatCard label="Data Captured" value={totalBytes > 1048576 ? `${(totalBytes / 1048576).toFixed(1)} MB` : `${(totalBytes / 1024).toFixed(0)} KB`} />
+                  <StatCard label="Threats Found" value={threats.length} sub={threats.length > 0 ? threats.map(t => t.type).join(", ") : "none"} />
                 </div>
-              </section>
+
+                {threats.length > 0 && (
+                  <section className="ws-section">
+                    <h2 className="ws-section-title">Threats Detected</h2>
+                    <div className="ws-alerts">
+                      {threats.map((t, i) => (
+                        <div key={i} className="ws-alert">
+                          <div className="ws-alert-top">
+                            <span className="ws-alert-type">{t.type}</span>
+                            <span className="ws-alert-sev" data-sev={t.severity}>{t.severity}</span>
+                            <span className="ws-alert-ip">{t.src_ip}</span>
+                          </div>
+                          <p className="ws-alert-detail">{t.detail}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
+                <div className="ws-charts-row">
+                  <section className="ws-section ws-section-flex">
+                    <h2 className="ws-section-title">Traffic Timeline <span className="ws-section-hint">— packets over time</span></h2>
+                    <Timeline packets={packets} />
+                    <div className="ws-tl-axis"><span>start</span><span>end</span></div>
+                  </section>
+                  <section className="ws-section">
+                    <h2 className="ws-section-title">Protocol Breakdown</h2>
+                    <ProtocolBar packets={packets} />
+                  </section>
+                </div>
+
+                <div className="ws-charts-row ws-charts-row-single">
+                  <section className="ws-section">
+                    <h2 className="ws-section-title">Top Source IPs</h2>
+                    <TopIps packets={packets} />
+                  </section>
+                </div>
+
+                <section className="ws-section">
+                  <PacketTable packets={packets} threats={threats} />
+                </section>
+              </>
             )}
 
-            <div className="ws-charts-row">
-              <section className="ws-section ws-section-flex">
-                <h2 className="ws-section-title">Traffic Timeline <span className="ws-section-hint">— packets over time</span></h2>
-                <Timeline packets={packets} />
-                <div className="ws-tl-axis"><span>start</span><span>end</span></div>
+            {tab === "network" && (
+              <section className="ws-section ws-section-graph">
+                <h2 className="ws-section-title">Network Flow Map <span className="ws-section-hint">— nodes = IPs · dots = live packet flow · arrows = direction</span></h2>
+                <NetworkGraph packets={packets} />
               </section>
-              <section className="ws-section">
-                <h2 className="ws-section-title">Protocol Breakdown</h2>
-                <ProtocolBar packets={packets} />
-              </section>
-            </div>
-
-            <div className="ws-charts-row ws-charts-row-single">
-              <section className="ws-section">
-                <h2 className="ws-section-title">Top Source IPs</h2>
-                <TopIps packets={packets} />
-              </section>
-            </div>
-
-            <section className="ws-section">
-              <PacketTable packets={packets} threats={threats} />
-            </section>
+            )}
           </>
         )}
       </main>
