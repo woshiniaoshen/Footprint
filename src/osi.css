@@ -422,10 +422,40 @@ body { background: var(--bg); color: var(--text); font-family: 'Inter', sans-ser
 .osi-cfg-ipstatus { font-size: 10px; font-family: 'JetBrains Mono', monospace; }
 .osi-cfg-ipok  { color: #42d9b8; }
 .osi-cfg-iperr { color: #e63946; }
-.osi-cfg-pcrow { display: flex; align-items: flex-end; gap: 6px; }
+.osi-cfg-pcrow { display: flex; align-items: flex-start; gap: 6px; }
+.osi-cfg-pcrow > .osi-cfg-pc-remove,
+.osi-cfg-pcrow > .osi-cfg-select,
+.osi-cfg-pcrow > .osi-cfg-vlan-fixed { margin-top: 18px; }
+.osi-cfg-select, .osi-cfg-vlan-fixed {
+  flex-shrink: 0; height: 32px; padding: 0 8px; border-radius: 7px;
+  background: rgba(0,0,0,0.3); border: 1px solid var(--line);
+  font-size: 11px; font-weight: 700; font-family: 'JetBrains Mono', monospace;
+}
+.osi-cfg-select { cursor: pointer; outline: none; }
+.osi-cfg-select option { background: #111827; color: var(--text); }
+.osi-cfg-vlan-fixed { display: inline-flex; align-items: center; cursor: help; }
+.osi-cfg-vlanbox {
+  border: 1px solid var(--line); border-radius: 9px;
+  padding: 10px 10px 2px; margin-bottom: 10px; background: rgba(255,255,255,0.015);
+}
+.osi-cfg-vlanhead {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 11px; font-weight: 700; font-family: 'JetBrains Mono', monospace;
+  margin-bottom: 8px;
+}
+.osi-cfg-vlan-remove {
+  background: none; border: 1px solid rgba(230,57,70,0.35); color: #e63946;
+  border-radius: 5px; font-size: 10px; padding: 2px 8px; cursor: pointer;
+}
+.osi-cfg-vlan-remove:hover { background: rgba(230,57,70,0.12); }
+.osi-cfg-subhead {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--quiet); margin: 14px 0 8px;
+}
+.osi-cfg-hint { font-size: 11px; color: var(--muted); flex: 1; min-width: 220px; }
 .osi-cfg-pcrow .osi-cfg-label { flex: 1; min-width: 0; }
 .osi-cfg-pc-remove {
-  flex-shrink: 0; height: 32px; width: 28px; margin-bottom: 1px;
+  flex-shrink: 0; height: 32px; width: 28px;
   background: rgba(230,57,70,0.1); border: 1px solid rgba(230,57,70,0.35);
   color: #e63946; border-radius: 6px; cursor: pointer; font-size: 16px; line-height: 1;
   transition: background 0.15s;

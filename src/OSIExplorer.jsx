@@ -46,11 +46,73 @@ const HM = {
 };
 const ROUTER_AFTER = new Set(["router_fwd","transit_b","pcb_l1","pcb_l2","pcb_l3","pcb_l4","pcb_l5","pcb_l6","pcb_l7","done"]);
 
+const VLAN_COLORS_A = ["#63b3ed","#f2c36b","#a78bfa"];
+const VLAN_COLORS_B = ["#42d9b8","#fb923c","#f472b6"];
+const MAX_EXTRA_VLANS = 2;
+
 const DEFAULT_INPUT = {
-  lanA: { cidr:"192.168.1.0/24", gatewayIp:"192.168.1.1", pcs:[{ip:"192.168.1.10"}], vlanId:10 },
-  lanB: { cidr:"192.168.2.0/24", gatewayIp:"192.168.2.1", pcs:[{ip:"192.168.2.20"}], vlanId:20 },
+  lanA: { cidr:"192.168.1.0/24", gatewayIp:"192.168.1.1", pcs:[{ip:"192.168.1.10",vlan:0}], vlanId:10, extraVlans:[] },
+  lanB: { cidr:"192.168.2.0/24", gatewayIp:"192.168.2.1", pcs:[{ip:"192.168.2.20",vlan:0}], vlanId:20, extraVlans:[] },
   vlanEnabled: false,
 };
+
+function subnetsOverlap(a, b) {
+  return ipToNum(a.network) <= ipToNum(b.broadcast) && ipToNum(b.network) <= ipToNum(a.broadcast);
+}
+
+function validateVlanId(v, usedIds) {
+  const s = String(v ?? "").trim();
+  const n = Number(s);
+  if (!s || !Number.isInteger(n) || n < 1 || n > 4094) return { ok:false, msg:"VLAN ID must be 1–4094" };
+  if (usedIds.includes(n)) return { ok:false, msg:`VLAN ${n} is already used` };
+  return { ok:true, msg:`802.1Q tag ${n}` };
+}
+
+// Primary VLAN (index 0) comes from the LAN's own cidr/gateway/vlanId fields.
+function lanVlanDefs(lan, vlanEnabled) {
+  return [
+    { id:lan.vlanId, cidr:lan.cidr, gatewayIp:lan.gatewayIp },
+    ...(vlanEnabled ? (lan.extraVlans || []) : []),
+  ];
+}
+
+function validateDraft(input) {
+  const ve = input.vlanEnabled;
+  const usedIds = [];
+  const subnets = [];
+  const res = { ok:true };
+  for (const [k, label] of [["lanA","LAN-A"],["lanB","LAN-B"]]) {
+    const lan  = input[k];
+    const defs = lanVlanDefs(lan, ve);
+    const vlans = defs.map(d => {
+      const si = parseCidr(d.cidr || "");
+      let cidrV = si
+        ? { ok:true, msg:`${si.mask} · ${si.totalHosts} hosts · ${si.firstHost}–${si.lastHost}` }
+        : { ok:false, msg:"Invalid CIDR (e.g. 192.168.30.0/24, /1–/30)" };
+      const name = ve ? `VLAN ${d.id}` : label;
+      if (si) {
+        const clash = subnets.find(s => subnetsOverlap(s.si, si));
+        if (clash) cidrV = { ok:false, msg:`Overlaps ${clash.name} (${clash.si.network}/${clash.si.cidr})` };
+        else subnets.push({ si, name });
+      }
+      let idV = { ok:true, msg:"" };
+      if (ve) {
+        idV = validateVlanId(d.id, usedIds);
+        if (idV.ok) usedIds.push(Number(d.id));
+      }
+      return { si, cidrV, idV, gwV: validateIp(d.gatewayIp, si) };
+    });
+    const gws = defs.map(d => d.gatewayIp);
+    const pcs = (lan.pcs || []).map((pc, i) => {
+      const idx = ve && i > 0 ? Math.min(pc.vlan || 0, vlans.length - 1) : 0;
+      const others = [...gws, ...lan.pcs.map((p, j) => j !== i ? p.ip : null)];
+      return validateIp(pc.ip, vlans[idx].si, ...others);
+    });
+    res[k] = { vlans, pcs };
+    res.ok = res.ok && vlans.every(v => v.cidrV.ok && v.idV.ok && v.gwV.ok) && pcs.every(v => v.ok);
+  }
+  return res;
+}
 
 // ── Validate a single IP against a subnet ─────────────────────────────────────
 function validateIp(ipStr, si, ...otherIps) {
@@ -74,44 +136,54 @@ function validateIp(ipStr, si, ...otherIps) {
 
 // ── Build config from input ───────────────────────────────────────────────────
 function buildCfg(input) {
-  const siA = parseCidr(input.lanA.cidr) || parseCidr("192.168.1.0/24");
-  const siB = parseCidr(input.lanB.cidr) || parseCidr("192.168.2.0/24");
-  const vGwA = validateIp(input.lanA.gatewayIp, siA);
-  const vGwB = validateIp(input.lanB.gatewayIp, siB);
-  const gwA  = vGwA.ok ? input.lanA.gatewayIp : siA.firstHost;
-  const gwB  = vGwB.ok ? input.lanB.gatewayIp : siB.firstHost;
+  const ve = input.vlanEnabled;
 
-  function buildPcs(pcsInput, si, gw, macPool, names, keys, defaultOffset) {
-    return (pcsInput||[{ip:numToIp(ipToNum(si.network)+defaultOffset)}]).slice(0,4).map((pc, i) => {
-      const usedIps = [gw, ...pcsInput.slice(0,i).map(p=>p.ip)];
-      const v = validateIp(pc.ip, si, ...usedIps);
+  function buildVlans(lan, fallbackCidr, defaultId, colors, phys) {
+    return lanVlanDefs(lan, ve).map((d, i) => {
+      const si = parseCidr(d.cidr || "") || (i === 0 ? parseCidr(fallbackCidr) : null);
+      if (!si) return null;
+      const id = ve ? (parseInt(d.id) || (i === 0 ? defaultId : null)) : null;
       return {
-        ip:   v.ok ? pc.ip : numToIp(ipToNum(si.network) + defaultOffset + i*10),
-        mac:  macPool[i], mask: si.mask, cidr: si.cidr, gw,
+        ...si, id, color: colors[i],
+        gateway:   validateIp(d.gatewayIp, si).ok ? d.gatewayIp : si.firstHost,
+        iface:     ve ? `${phys}.${id}` : phys,
+        dhcpStart: numToIp(ipToNum(si.network) + 2), dhcpEnd: si.lastHost,
+      };
+    }).filter(Boolean);
+  }
+
+  function buildPcs(pcsInput, vlans, macPool, names, keys, defaultOffset) {
+    return (pcsInput || []).slice(0, 4).map((pc, i) => {
+      const vlanIdx = ve && i > 0 ? Math.min(pc.vlan || 0, vlans.length - 1) : 0;
+      const v = vlans[vlanIdx];
+      return {
+        ip:   validateIp(pc.ip, v).ok ? pc.ip : numToIp(ipToNum(v.network) + defaultOffset + i*10),
+        mac:  macPool[i], mask: v.mask, cidr: v.cidr, network: v.network, gw: v.gateway,
+        vlanIdx, vlan: v.id, color: v.color, iface: v.iface,
         name: names[i], key: keys[i],
       };
     });
   }
 
-  const pcsA = buildPcs(input.lanA.pcs, siA, gwA, MAC_POOL_A, PC_NAMES_A, PC_KEYS_A, 10);
-  const pcsB = buildPcs(input.lanB.pcs, siB, gwB, MAC_POOL_B, PC_NAMES_B, PC_KEYS_B, 20);
-  const lanA = { ...siA, gateway:gwA,
-    dhcpStart: numToIp(ipToNum(siA.network)+2), dhcpEnd: siA.lastHost,
-    vlan: input.vlanEnabled ? (parseInt(input.lanA.vlanId)||10) : null };
-  const lanB = { ...siB, gateway:gwB,
-    dhcpStart: numToIp(ipToNum(siB.network)+2), dhcpEnd: siB.lastHost,
-    vlan: input.vlanEnabled ? (parseInt(input.lanB.vlanId)||20) : null };
+  const vlansA = buildVlans(input.lanA, "192.168.1.0/24", 10, VLAN_COLORS_A, "eth0");
+  const vlansB = buildVlans(input.lanB, "192.168.2.0/24", 20, VLAN_COLORS_B, "eth1");
+  const pcsA = buildPcs(input.lanA.pcs, vlansA, MAC_POOL_A, PC_NAMES_A, PC_KEYS_A, 10);
+  const pcsB = buildPcs(input.lanB.pcs, vlansB, MAC_POOL_B, PC_NAMES_B, PC_KEYS_B, 20);
+  const lanA = { ...vlansA[0], vlan: vlansA[0].id, vlans: vlansA };
+  const lanB = { ...vlansB[0], vlan: vlansB[0].id, vlans: vlansB };
   return {
     lanA, lanB, pcsA, pcsB,
     pcA: pcsA[0], pcB: pcsB[0],
-    router: { lanAIp:gwA, lanAMac:MACS.rtrA, lanBIp:gwB, lanBMac:MACS.rtrB },
-    vlanEnabled: input.vlanEnabled,
+    router: { lanAIp:lanA.gateway, lanAMac:MACS.rtrA, lanBIp:lanB.gateway, lanBMac:MACS.rtrB },
+    vlanEnabled: ve,
   };
 }
 
+function vlanIdsLabel(lan) { return lan.vlans.map(v => v.id).join(", "); }
+
 // ── Build HF (header fields) with dynamic IPs ─────────────────────────────────
 function buildHF(cfg) {
-  const {pcA:a, pcB:b, router:r, lanA, lanB, vlanEnabled} = cfg;
+  const {pcA:a, pcB:b, lanA, lanB, vlanEnabled} = cfg;
   const vlanA = vlanEnabled ? [{f:"TPID",v:"0x8100 (802.1Q)"},{f:"VLAN ID",v:`${lanA.vlan}  (LAN-A)`},{f:"Priority",v:"0 (Best Effort)"}] : [];
   const vlanB = vlanEnabled ? [{f:"TPID",v:"0x8100 (802.1Q)"},{f:"VLAN ID",v:`${lanB.vlan}  (LAN-B)`},{f:"Priority",v:"0 (Best Effort)"}] : [];
   return {
@@ -130,50 +202,53 @@ function buildHF(cfg) {
 
 // ── Build DEVICES with dynamic IPs ────────────────────────────────────────────
 function buildDevices(cfg) {
-  const {pcsA,pcsB,router:r,lanA,lanB,vlanEnabled} = cfg;
-  function pcDev(pc, lan, lanName, isServer=false) {
+  const {pcsA,pcsB,lanA,lanB,vlanEnabled} = cfg;
+  function pcDev(pc, lanName, isServer=false) {
     return { name:pc.name, type:isServer?"End Device / Web Server":"End Device", rows:[
       {k:"IP Address",     v:`${pc.ip} / ${pc.cidr}`},
       {k:"Subnet Mask",    v:pc.mask},
       {k:"MAC Address",    v:pc.mac},
-      {k:"Default Gateway",v:pc.gw},
+      {k:"Default Gateway",v:`${pc.gw}${vlanEnabled?`  (Router ${pc.iface})`:""}`},
       {k:"DHCP Server",    v:`${pc.gw}  (Router)`},
       {k:"DNS Server",     v:"8.8.8.8  (Google DNS)"},
-      {k:"Network",        v:`${lan.network}/${lan.cidr}  (${lanName})`},
+      {k:"Network",        v:`${pc.network}/${pc.cidr}  (${lanName}${vlanEnabled?` · VLAN ${pc.vlan}`:""})`},
       ...(isServer?[{k:"Listening On",v:"TCP port 80  (HTTP)"}]:[]),
-      ...(vlanEnabled?[{k:"VLAN",v:`${lan.vlan}  (Access port)`}]:[]),
+      ...(vlanEnabled?[{k:"VLAN",v:`${pc.vlan}  (Access port — frames untagged at the PC)`}]:[]),
+    ]};
+  }
+  function routerIfRows(lan, label, mac) {
+    return [
+      ...lan.vlans.map(v => ({k:vlanEnabled?`${label} ${v.iface}`:`${label} IP`, v:`${v.gateway} / ${v.cidr}${vlanEnabled?`  (VLAN ${v.id})`:""}`})),
+      {k:`${label} MAC`, v:mac},
+      ...lan.vlans.map(v => ({k:vlanEnabled?`DHCP Pool VLAN ${v.id}`:`DHCP Pool ${label.slice(-1)}`, v:`${v.dhcpStart} – ${v.dhcpEnd}`})),
+    ];
+  }
+  function switchDev(lan, pcs, label) {
+    const trunk = lan.vlans.length > 1;
+    return { name:`Switch (${label})`, type:"Layer 2 Device", rows:[
+      {k:"Type",           v:`${vlanEnabled?"Managed (VLAN-aware)":"Unmanaged"} L2 Switch`},
+      {k:"IP Address",     v:"None  (not required)"},
+      {k:"Operates At",    v:"OSI Layer 2 (Data Link)"},
+      {k:"Forwards By",    v:vlanEnabled?"VLAN + destination MAC":"Destination MAC address"},
+      {k:"Ports",          v:"24× Gigabit Ethernet"},
+      ...(vlanEnabled ? lan.vlans.map(v => ({k:`VLAN ${v.id}`, v:pcs.filter(p=>p.vlan===v.id).map(p=>p.name).join(", ") || "no hosts"})) : []),
+      ...(vlanEnabled ? [{k:"Uplink Fa0/24", v:trunk?`802.1Q trunk → Router (allowed ${vlanIdsLabel(lan)})`:`Tagged VLAN ${lan.vlan} → Router`}] : []),
     ]};
   }
   const devs = {};
-  pcsA.forEach(pc => { devs[pc.key] = pcDev(pc, lanA, "LAN-A"); });
-  pcsB.forEach((pc,i) => { devs[pc.key] = pcDev(pc, lanB, "LAN-B", i===0); });
+  pcsA.forEach(pc => { devs[pc.key] = pcDev(pc, "LAN-A"); });
+  pcsB.forEach((pc,i) => { devs[pc.key] = pcDev(pc, "LAN-B", i===0); });
   return { ...devs,
     router:{ name:"Router", type:"Layer 3 Device", rows:[
-      {k:"LAN-A IP",       v:`${r.lanAIp} / ${lanA.cidr}`},
-      {k:"LAN-A MAC",      v:MACS.rtrA},
-      {k:"LAN-B IP",       v:`${r.lanBIp} / ${lanB.cidr}`},
-      {k:"LAN-B MAC",      v:MACS.rtrB},
-      {k:"DHCP Pool A",    v:`${lanA.dhcpStart} – ${lanA.dhcpEnd}`},
-      {k:"DHCP Pool B",    v:`${lanB.dhcpStart} – ${lanB.dhcpEnd}`},
+      ...routerIfRows(lanA, "LAN-A", MACS.rtrA),
+      ...routerIfRows(lanB, "LAN-B", MACS.rtrB),
+      ...(vlanEnabled && (lanA.vlans.length>1 || lanB.vlans.length>1)
+        ? [{k:"Inter-VLAN",v:"Router-on-a-stick: one physical port, one subinterface per VLAN"}] : []),
       {k:"DNS Forwarding", v:"8.8.8.8"},
       {k:"Routing",        v:"Connected + Static routes"},
     ]},
-    switchA:{ name:"Switch (LAN-A)", type:"Layer 2 Device", rows:[
-      {k:"Type",           v:`${vlanEnabled?"Managed (VLAN-aware)":"Unmanaged"} L2 Switch`},
-      {k:"IP Address",     v:"None  (not required)"},
-      {k:"Operates At",    v:"OSI Layer 2 (Data Link)"},
-      {k:"Forwards By",    v:"Destination MAC address"},
-      {k:"Ports",          v:"24× Gigabit Ethernet"},
-      ...(vlanEnabled?[{k:"VLAN",v:`VLAN ${lanA.vlan} on access ports`}]:[]),
-    ]},
-    switchB:{ name:"Switch (LAN-B)", type:"Layer 2 Device", rows:[
-      {k:"Type",           v:`${vlanEnabled?"Managed (VLAN-aware)":"Unmanaged"} L2 Switch`},
-      {k:"IP Address",     v:"None  (not required)"},
-      {k:"Operates At",    v:"OSI Layer 2 (Data Link)"},
-      {k:"Forwards By",    v:"Destination MAC address"},
-      {k:"Ports",          v:"24× Gigabit Ethernet"},
-      ...(vlanEnabled?[{k:"VLAN",v:`VLAN ${lanB.vlan} on access ports`}]:[]),
-    ]},
+    switchA: switchDev(lanA, pcsA, "LAN-A"),
+    switchB: switchDev(lanB, pcsB, "LAN-B"),
   };
 }
 
@@ -183,13 +258,14 @@ function getProto(id, cfg) {
   const vA = vlanEnabled ? `  VLAN:${lanA.vlan}` : "";
   const vB = vlanEnabled ? `  VLAN:${lanB.vlan}` : "";
   const map = {
-    router_init:
-`eth0 (LAN-A): ${r.lanAIp}/${lanA.cidr}  → UP
-eth1 (LAN-B): ${r.lanBIp}/${lanB.cidr}  → UP
-DHCP server:  listening on eth0 and eth1
-Routing:      ${lanA.network}/${lanA.cidr} via eth0  [Connected]
-              ${lanB.network}/${lanB.cidr} via eth1  [Connected]
-LLDP:         Hello frames broadcast on all ports`,
+    router_init: [
+      ...[[lanA,"LAN-A"],[lanB,"LAN-B"]].flatMap(([lan,label]) => lan.vlans.map(v =>
+        `${v.iface.padEnd(8)} (${label}${vlanEnabled?` VLAN ${v.id}`:""}): ${v.gateway}/${v.cidr}  → UP`)),
+      `DHCP server:  one pool per ${vlanEnabled?"VLAN subinterface":"interface"}`,
+      ...[...lanA.vlans, ...lanB.vlans].map((v,i) =>
+        `${i===0?"Routing:     ":"             "} ${v.network}/${v.cidr} via ${v.iface}  [Connected]`),
+      "LLDP:         Hello frames broadcast on all ports",
+    ].join("\n"),
     pca_dhcp:
 `→ DHCP Discover  src:0.0.0.0        dst:255.255.255.255
 ← DHCP Offer    src:${r.lanAIp}   dst:255.255.255.255
@@ -222,7 +298,7 @@ PC-A ARP cache: ${r.lanAIp} → ${MACS.rtrA}  (Router LAN-A)`,
 
 // ── Build per-device boot logs (dynamic IPs in details) ───────────────────────
 function buildBootLogs(cfg) {
-  const {pcA:a,pcB:b,router:r,lanA,lanB,pcsA,pcsB} = cfg;
+  const {lanA,lanB,pcsA,pcsB} = cfg;
   function pcLog(pc, dhcpStep, arpStep, gwRtrMac) {
     return [
       {stepId:null,       t:"0.00s",icon:"⚡",event:"NIC powered on",  detail:"eth0 link up (1 Gbps)"},
@@ -238,10 +314,10 @@ function buildBootLogs(cfg) {
   const logs = {
     router:[
       {stepId:null,          t:"0.00s",icon:"⚡",event:"Power on",           detail:"Firmware loading"},
-      {stepId:"router_init", t:"0.30s",icon:"🔌",event:"eth0 UP (LAN-A)",   detail:`${r.lanAIp}/${lanA.cidr} assigned`},
-      {stepId:"router_init", t:"0.30s",icon:"🔌",event:"eth1 UP (LAN-B)",   detail:`${r.lanBIp}/${lanB.cidr} assigned`},
-      {stepId:"router_init", t:"0.50s",icon:"🗺", event:"Routing table built",detail:`${lanA.network}/${lanA.cidr}, ${lanB.network}/${lanB.cidr}`},
-      {stepId:"router_init", t:"0.60s",icon:"📡",event:"DHCP server started",detail:"Pools on both LANs"},
+      ...[...lanA.vlans, ...lanB.vlans].map(v =>
+        ({stepId:"router_init", t:"0.30s",icon:"🔌",event:`${v.iface} UP${cfg.vlanEnabled?` (VLAN ${v.id})`:""}`, detail:`${v.gateway}/${v.cidr} assigned`})),
+      {stepId:"router_init", t:"0.50s",icon:"🗺", event:"Routing table built",detail:[...lanA.vlans, ...lanB.vlans].map(v=>`${v.network}/${v.cidr}`).join(", ")},
+      {stepId:"router_init", t:"0.60s",icon:"📡",event:"DHCP server started",detail:`${lanA.vlans.length+lanB.vlans.length} pools`},
       {stepId:"router_init", t:"0.70s",icon:"📢",event:"LLDP Hello sent",   detail:"Announced on all ports"},
       {stepId:"router_init", t:"1.00s",icon:"✅",event:"Ready",             detail:"Forwarding enabled"},
     ],
@@ -262,6 +338,13 @@ function buildBootLogs(cfg) {
       {stepId:"pcb_dhcp",    t:"30+s", icon:"📋",event:"MAC table updated", detail:`${MAC_POOL_B[0].slice(0,8)}... learned on Fa0/1`},
     ],
   };
+  if (cfg.vlanEnabled) {
+    for (const [sw, lan] of [["switchA", lanA], ["switchB", lanB]]) {
+      logs[sw].splice(1, 0,
+        {stepId:"switch_init", t:" 0.1s",icon:"🏷", event:"VLANs loaded",     detail:`VLAN ${vlanIdsLabel(lan)} from startup-config`},
+        {stepId:"switch_init", t:" 0.1s",icon:"🔗", event:"Fa0/24 uplink",    detail:lan.vlans.length>1?`802.1Q trunk, allowed ${vlanIdsLabel(lan)}`:`Tagged VLAN ${lan.vlan}`});
+    }
+  }
   pcsA.forEach(pc => { logs[pc.key] = pcLog(pc, "pca_dhcp", "pca_arp_gw", MACS.rtrA); });
   pcsB.forEach(pc => { logs[pc.key] = pcLog(pc, "pcb_dhcp", "pcb_dhcp",   MACS.rtrB); });
   return logs;
@@ -391,49 +474,48 @@ function stepAtOrPast(si, id) {
 function getArpState(si, cfg) {
   return {
     router: [
-      stepAtOrPast(si,"router_rx")  && {ip:cfg.pcA.ip, mac:cfg.pcA.mac, iface:"LAN-A"},
-      stepAtOrPast(si,"router_fwd") && {ip:cfg.pcB.ip, mac:cfg.pcB.mac, iface:"LAN-B"},
+      stepAtOrPast(si,"router_rx")  && {ip:cfg.pcA.ip, mac:cfg.pcA.mac, iface:`LAN-A ${cfg.pcA.iface}`},
+      stepAtOrPast(si,"router_fwd") && {ip:cfg.pcB.ip, mac:cfg.pcB.mac, iface:`LAN-B ${cfg.pcB.iface}`},
     ].filter(Boolean),
-    pcA: stepAtOrPast(si,"pca_arp_gw") ? [{ip:cfg.router.lanAIp, mac:MACS.rtrA, host:"Router LAN-A"}] : [],
-    pcB: stepAtOrPast(si,"pcb_l2")     ? [{ip:cfg.router.lanBIp, mac:MACS.rtrB, host:"Router LAN-B"}] : [],
   };
 }
 function getDhcpLeases(si, cfg) {
   const leases = [];
   if (stepAtOrPast(si,"pca_dhcp"))
-    cfg.pcsA.forEach(pc => leases.push({ip:pc.ip, mac:pc.mac, host:pc.name, iface:"LAN-A", lease:"24h"}));
+    cfg.pcsA.forEach(pc => leases.push({ip:pc.ip, mac:pc.mac, host:pc.name, iface:`LAN-A ${pc.iface}`, lease:"24h"}));
   if (stepAtOrPast(si,"pcb_dhcp"))
-    cfg.pcsB.forEach(pc => leases.push({ip:pc.ip, mac:pc.mac, host:pc.name, iface:"LAN-B", lease:"24h"}));
+    cfg.pcsB.forEach(pc => leases.push({ip:pc.ip, mac:pc.mac, host:pc.name, iface:`LAN-B ${pc.iface}`, lease:"24h"}));
   return leases;
 }
-function getSwitchAMac(si, cfg) {
-  if (!stepAtOrPast(si,"pca_dhcp")) return [];
-  const vlan = cfg.vlanEnabled ? cfg.lanA.vlan : 1;
+function getSwitchMac(si, cfg, side) {
+  const lan = side==="A" ? cfg.lanA : cfg.lanB;
+  const pcs = side==="A" ? cfg.pcsA : cfg.pcsB;
+  if (!stepAtOrPast(si, side==="A"?"pca_dhcp":"pcb_dhcp")) return [];
+  const ve = cfg.vlanEnabled;
   return [
-    ...cfg.pcsA.map((pc,i) => ({mac:pc.mac, port:`Fa0/${i+1}`, host:pc.name, vlan, type:"Dynamic"})),
-    {mac:MACS.rtrA, port:"Fa0/24", host:"Router (LAN-A)", vlan, type:"Dynamic"},
-  ];
-}
-function getSwitchBMac(si, cfg) {
-  if (!stepAtOrPast(si,"pcb_dhcp")) return [];
-  const vlan = cfg.vlanEnabled ? cfg.lanB.vlan : 1;
-  return [
-    ...cfg.pcsB.map((pc,i) => ({mac:pc.mac, port:`Fa0/${i+1}`, host:pc.name, vlan, type:"Dynamic"})),
-    {mac:MACS.rtrB, port:"Fa0/24", host:"Router (LAN-B)", vlan, type:"Dynamic"},
+    ...pcs.map((pc,i) => ({mac:pc.mac, port:`Fa0/${i+1}`, host:pc.name, vlan:ve?pc.vlan:1, type:"Dynamic"})),
+    {mac:side==="A"?MACS.rtrA:MACS.rtrB, port:"Fa0/24", host:`Router (LAN-${side})`,
+     vlan:ve?(lan.vlans.length>1?`trunk ${vlanIdsLabel(lan)}`:lan.vlan):1, type:"Dynamic"},
   ];
 }
 function getRouterRoutes(cfg) {
   return [
-    {dst:`${cfg.lanA.network}/${cfg.lanA.cidr}`, nh:"0.0.0.0 (direct)", iface:"LAN-A (eth0)", type:"C"},
-    {dst:`${cfg.lanB.network}/${cfg.lanB.cidr}`, nh:"0.0.0.0 (direct)", iface:"LAN-B (eth1)", type:"C"},
+    ...[[cfg.lanA,"LAN-A"],[cfg.lanB,"LAN-B"]].flatMap(([lan,label]) => lan.vlans.map(v =>
+      ({dst:`${v.network}/${v.cidr}`, nh:"0.0.0.0 (direct)", iface:`${label} (${v.iface})`, type:"C"}))),
     {dst:"0.0.0.0/0", nh:"ISP gateway", iface:"WAN", type:"S*"},
   ];
 }
-function getPcRoutes(side, si, cfg) {
+function getPcRoutes(pc, side, si) {
   if (!stepAtOrPast(si, side==="A"?"pca_dhcp":"pcb_dhcp")) return [];
-  return side==="A"
-    ? [{dst:`${cfg.lanA.network}/${cfg.lanA.cidr}`,nh:"0.0.0.0 (direct)",iface:"eth0",type:"C"},{dst:"0.0.0.0/0",nh:cfg.router.lanAIp,iface:"eth0",type:"default"}]
-    : [{dst:`${cfg.lanB.network}/${cfg.lanB.cidr}`,nh:"0.0.0.0 (direct)",iface:"eth0",type:"C"},{dst:"0.0.0.0/0",nh:cfg.router.lanBIp,iface:"eth0",type:"default"}];
+  return [
+    {dst:`${pc.network}/${pc.cidr}`, nh:"0.0.0.0 (direct)", iface:"eth0", type:"C"},
+    {dst:"0.0.0.0/0", nh:pc.gw, iface:"eth0", type:"default"},
+  ];
+}
+function getPcArp(pc, side, si) {
+  const step = side==="A" ? "pca_arp_gw" : (pc.key==="B" ? "pcb_l2" : "pcb_dhcp");
+  if (!stepAtOrPast(si, step)) return [];
+  return [{ip:pc.gw, mac:side==="A"?MACS.rtrA:MACS.rtrB, host:`Router ${pc.iface}`}];
 }
 
 // ── Network Config Panel ──────────────────────────────────────────────────────
@@ -454,102 +536,124 @@ function IpField({ label, value, onChange, validation, placeholder }) {
   );
 }
 
-function LanBlock({ title, color, cidr, onCidr, gatewayIp, onGateway, pcs, onPcs, pcNames, vlanEnabled, vlanId, onVlanId, si }) {
-  const vGw = si ? validateIp(gatewayIp, si) : null;
-  function setPcIp(i, val) {
-    const next = pcs.map((p,j) => j===i ? {ip:val} : p);
-    onPcs(next);
+function VlanBox({ title, color, def, v, showId, onField, onRemove }) {
+  return (
+    <div className="osi-cfg-vlanbox" style={{borderColor:`${color}55`}}>
+      {title && <div className="osi-cfg-vlanhead" style={{color}}>
+        <span>{title}</span>
+        {onRemove && <button className="osi-cfg-vlan-remove" onClick={onRemove} title="Remove VLAN">Remove</button>}
+      </div>}
+      {showId && <IpField label="VLAN ID" value={String(def.id ?? "")} onChange={x=>onField("id",x)}
+        placeholder="30" validation={v.idV}/>}
+      <IpField label="Network / CIDR" value={def.cidr || ""} onChange={x=>onField("cidr",x)}
+        placeholder="192.168.30.0/24" validation={v.cidrV}/>
+      <IpField label={showId ? "Router subinterface IP (gateway)" : "Router / Gateway IP"}
+        value={def.gatewayIp || ""} onChange={x=>onField("gatewayIp",x)}
+        placeholder={v.si?.firstHost || ""} validation={v.si ? v.gwV : null}/>
+    </div>
+  );
+}
+
+function suggestVlan(draft) {
+  const allDefs = [draft.lanA, draft.lanB].flatMap(l => lanVlanDefs(l, true));
+  const usedIds = new Set(allDefs.map(d => Number(d.id)));
+  let id = 30;
+  while (usedIds.has(id)) id += 10;
+  const subnets = allDefs.map(d => parseCidr(d.cidr || "")).filter(Boolean);
+  let third = id <= 255 ? id : 100;
+  while (third < 255 && subnets.some(s => subnetsOverlap(s, parseCidr(`192.168.${third}.0/24`)))) third++;
+  return { id:String(id), cidr:`192.168.${third}.0/24`, gatewayIp:`192.168.${third}.1` };
+}
+
+function LanBlock({ title, colors, lan, setLan, vr, pcNames, vlanEnabled, onAddVlan }) {
+  const defs = lanVlanDefs(lan, vlanEnabled);
+  const pcs  = lan.pcs || [];
+  const nExtra = (lan.extraVlans || []).length;
+
+  function setVlanField(i, key, val) {
+    if (i === 0) setLan(l => ({...l, [key==="id" ? "vlanId" : key]: val}));
+    else setLan(l => ({...l, extraVlans: l.extraVlans.map((x,j) => j===i-1 ? {...x, [key]:val} : x)}));
   }
-  function addPc() {
-    if (pcs.length >= 4) return;
-    onPcs([...pcs, {ip:""}]);
+  function removeVlan(i) {
+    setLan(l => ({...l,
+      extraVlans: l.extraVlans.filter((_,j) => j !== i-1),
+      pcs: l.pcs.map(p => {
+        const cur = p.vlan || 0;
+        return {...p, vlan: cur===i ? 0 : cur>i ? cur-1 : cur};
+      }),
+    }));
   }
-  function removePc(i) {
-    if (pcs.length <= 1) return;
-    onPcs(pcs.filter((_,j)=>j!==i));
+  function setPc(i, patch) { setLan(l => ({...l, pcs: l.pcs.map((p,j) => j===i ? {...p, ...patch} : p)})); }
+  function changePcVlan(i, idx) {
+    const si = vr.vlans[idx]?.si;
+    const patch = { vlan: idx };
+    if (si && !validateIp(pcs[i].ip, si).ok) {
+      const used = new Set([...defs.map(d=>d.gatewayIp), ...pcs.map(p=>p.ip)]);
+      const bc = ipToNum(si.broadcast);
+      let n = ipToNum(si.network) + 10;
+      while (n < bc && used.has(numToIp(n))) n++;
+      if (n < bc) patch.ip = numToIp(n);
+    }
+    setPc(i, patch);
   }
+
   return (
     <div className="osi-cfg-lan">
-      <div className="osi-cfg-lanhead" style={{color}}>{title}</div>
+      <div className="osi-cfg-lanhead" style={{color:colors[0]}}>{title}</div>
 
-      <label className="osi-cfg-label">Network / CIDR
-        <input className="osi-cfg-input" value={cidr} onChange={e=>onCidr(e.target.value)} placeholder="192.168.1.0/24"/>
-        {si
-          ? <span className="osi-cfg-preview">{si.mask} · {si.totalHosts} hosts · {si.firstHost}–{si.lastHost}</span>
-          : <span className="osi-cfg-err">Invalid CIDR (e.g. 192.168.1.0/24, /8–/30)</span>}
-      </label>
+      {defs.map((d, i) => (
+        <VlanBox key={i} def={d} v={vr.vlans[i]} color={colors[i]} showId={vlanEnabled}
+          title={vlanEnabled ? (i===0 ? `VLAN ${d.id || "?"} · primary` : `VLAN ${d.id || "?"}`) : null}
+          onField={(k,x)=>setVlanField(i,k,x)}
+          onRemove={i>0 ? ()=>removeVlan(i) : null}/>
+      ))}
+      {vlanEnabled && nExtra < MAX_EXTRA_VLANS && (
+        <button className="osi-cfg-pc-add" onClick={onAddVlan}>+ Add VLAN</button>
+      )}
 
-      <IpField label="Router / Gateway IP" value={gatewayIp} onChange={onGateway}
-        placeholder={si?.firstHost||"192.168.1.1"} validation={si ? vGw : null}/>
-
+      <div className="osi-cfg-subhead">Hosts</div>
       {pcs.map((pc, i) => {
-        const otherIps = [gatewayIp, ...pcs.map((p,j)=>j!==i?p.ip:null).filter(Boolean)];
-        const v = si ? validateIp(pc.ip, si, ...otherIps) : null;
+        const idx   = vlanEnabled && i > 0 ? Math.min(pc.vlan || 0, defs.length-1) : 0;
+        const color = colors[idx];
         return (
           <div key={i} className="osi-cfg-pcrow">
-            <IpField label={pcNames[i]+" IP"} value={pc.ip}
-              onChange={val=>setPcIp(i,val)}
-              placeholder={si ? numToIp(ipToNum(si.network)+10+i*10) : ""}
-              validation={v}/>
-            {pcs.length > 1 && (
-              <button className="osi-cfg-pc-remove" onClick={()=>removePc(i)} title="Remove PC">−</button>
+            <IpField label={`${pcNames[i]} IP${i===0 ? " · trace endpoint" : ""}`} value={pc.ip}
+              onChange={val=>setPc(i, {ip:val})}
+              placeholder={vr.vlans[idx]?.si ? numToIp(ipToNum(vr.vlans[idx].si.network)+10+i*10) : ""}
+              validation={vr.pcs[i]}/>
+            {vlanEnabled && (i === 0
+              ? <span className="osi-cfg-vlan-fixed" style={{color, borderColor:`${color}66`}}
+                  title="The packet trace starts/ends here, so this PC stays on the primary VLAN">VLAN {defs[0].id || "?"}</span>
+              : <select className="osi-cfg-select" style={{color, borderColor:`${color}66`}} value={idx}
+                  onChange={e=>changePcVlan(i, Number(e.target.value))}>
+                  {defs.map((d,j) => <option key={j} value={j}>VLAN {d.id || "?"}</option>)}
+                </select>)}
+            {i > 0 && (
+              <button className="osi-cfg-pc-remove" onClick={()=>setLan(l=>({...l, pcs:l.pcs.filter((_,j)=>j!==i)}))} title="Remove PC">−</button>
             )}
           </div>
         );
       })}
       {pcs.length < 4 && (
-        <button className="osi-cfg-pc-add" onClick={addPc}>+ Add PC</button>
-      )}
-
-      {vlanEnabled && (
-        <label className="osi-cfg-label">VLAN ID
-          <input className="osi-cfg-input osi-cfg-short" type="number" min="1" max="4094"
-            value={vlanId} onChange={e=>onVlanId(e.target.value)}/>
-        </label>
+        <button className="osi-cfg-pc-add" onClick={()=>setLan(l=>({...l, pcs:[...l.pcs, {ip:"", vlan:0}]}))}>+ Add PC</button>
       )}
     </div>
   );
 }
 
 function NetworkConfigPanel({ draft, setDraft, onApply, onReset, onClose }) {
-  function setLanA(key, val) { setDraft(d=>({...d, lanA:{...d.lanA, [key]:val}})); }
-  function setLanB(key, val) { setDraft(d=>({...d, lanB:{...d.lanB, [key]:val}})); }
+  const vr = validateDraft(draft);
+  const canApply = vr.ok;
+  const setLanA = fn => setDraft(d => ({...d, lanA: fn(d.lanA)}));
+  const setLanB = fn => setDraft(d => ({...d, lanB: fn(d.lanB)}));
 
-  const siA = parseCidr(draft.lanA.cidr);
-  const siB = parseCidr(draft.lanB.cidr);
-  const vGwA = siA ? validateIp(draft.lanA.gatewayIp, siA) : null;
-  const vGwB = siB ? validateIp(draft.lanB.gatewayIp, siB) : null;
-  const pcsA = draft.lanA.pcs || [];
-  const pcsB = draft.lanB.pcs || [];
-  const allPcAValid = siA && pcsA.every((pc,i) => {
-    const others = [draft.lanA.gatewayIp, ...pcsA.map((p,j)=>j!==i?p.ip:null).filter(Boolean)];
-    return validateIp(pc.ip, siA, ...others).ok;
-  });
-  const allPcBValid = siB && pcsB.every((pc,i) => {
-    const others = [draft.lanB.gatewayIp, ...pcsB.map((p,j)=>j!==i?p.ip:null).filter(Boolean)];
-    return validateIp(pc.ip, siB, ...others).ok;
-  });
-  const canApply = siA && siB && vGwA?.ok && vGwB?.ok && allPcAValid && allPcBValid;
+  const addVlan = k => setDraft(d => ({...d, [k]: {...d[k], extraVlans: [...(d[k].extraVlans || []), suggestVlan(d)]}}));
 
   return (
     <div className="osi-cfg-panel">
       <div className="osi-cfg-panelhead">
         <span>⚙ Network Configuration</span>
         <button className="osi-cfg-close" onClick={onClose}>✕</button>
-      </div>
-      <div className="osi-cfg-grid">
-        <LanBlock title="LAN-A" color="#63b3ed" si={siA}
-          cidr={draft.lanA.cidr}           onCidr={v=>setLanA("cidr",v)}
-          gatewayIp={draft.lanA.gatewayIp} onGateway={v=>setLanA("gatewayIp",v)}
-          pcs={pcsA}                       onPcs={v=>setLanA("pcs",v)}
-          pcNames={PC_NAMES_A}
-          vlanEnabled={draft.vlanEnabled} vlanId={draft.lanA.vlanId} onVlanId={v=>setLanA("vlanId",v)}/>
-        <LanBlock title="LAN-B" color="#42d9b8" si={siB}
-          cidr={draft.lanB.cidr}           onCidr={v=>setLanB("cidr",v)}
-          gatewayIp={draft.lanB.gatewayIp} onGateway={v=>setLanB("gatewayIp",v)}
-          pcs={pcsB}                       onPcs={v=>setLanB("pcs",v)}
-          pcNames={PC_NAMES_B}
-          vlanEnabled={draft.vlanEnabled} vlanId={draft.lanB.vlanId} onVlanId={v=>setLanB("vlanId",v)}/>
       </div>
       <div className="osi-cfg-opts">
         <label className="osi-cfg-toggle">
@@ -558,6 +662,15 @@ function NetworkConfigPanel({ draft, setDraft, onApply, onReset, onClose }) {
           <span>Enable 802.1Q VLANs</span>
           {draft.vlanEnabled && <span className="osi-cfg-vlan-badge">VLAN</span>}
         </label>
+        {draft.vlanEnabled && <span className="osi-cfg-hint">
+          Each VLAN is its own subnet and broadcast domain. The router reaches every VLAN through one subinterface on a trunk (router-on-a-stick).
+        </span>}
+      </div>
+      <div className="osi-cfg-grid">
+        <LanBlock title="LAN-A" colors={VLAN_COLORS_A} lan={draft.lanA} setLan={setLanA} vr={vr.lanA}
+          pcNames={PC_NAMES_A} vlanEnabled={draft.vlanEnabled} onAddVlan={()=>addVlan("lanA")}/>
+        <LanBlock title="LAN-B" colors={VLAN_COLORS_B} lan={draft.lanB} setLan={setLanB} vr={vr.lanB}
+          pcNames={PC_NAMES_B} vlanEnabled={draft.vlanEnabled} onAddVlan={()=>addVlan("lanB")}/>
       </div>
       <div className="osi-cfg-actions">
         <button className="osi-cfg-apply" disabled={!canApply} onClick={onApply}>Apply — restart simulation</button>
@@ -580,27 +693,44 @@ function TopologyDiagram({ pos, activeSide, selectedDevice, onSelectDevice, cfg 
   const lanBHeight = nExtraB > 0 ? 240 : 122;
 
   const mainNodes = [
-    {x:85,  y:78, label:a.name,  ip:a.ip,  mac:a.mac,  key:"A",       shape:"pc"},
+    {x:85,  y:78, label:a.name,  ip:a.ip,  mac:a.mac,  key:"A",       shape:"pc", color:a.color, vlan:a.vlan},
     {x:255, y:78, label:"Switch",ip:"No IP  (L2)", mac:"", key:"switchA", shape:"sw"},
-    {x:445, y:78, label:"Router",ip:`${r.lanAIp}/${r.lanBIp}`, mac:"DD:.. / EE:..", key:"router", shape:"rt"},
+    {x:445, y:78, label:"Router",ip:`${r.lanAIp}/${r.lanBIp}`,
+     mac:vlanEnabled?`${lanA.vlans.length+lanB.vlans.length} subinterfaces`:"DD:.. / EE:..", key:"router", shape:"rt"},
     {x:635, y:78, label:"Switch",ip:"No IP  (L2)", mac:"", key:"switchB", shape:"sw"},
-    {x:815, y:78, label:b.name,  ip:b.ip,  mac:b.mac,  key:"B",       shape:"pc"},
+    {x:815, y:78, label:b.name,  ip:b.ip,  mac:b.mac,  key:"B",       shape:"pc", color:b.color, vlan:b.vlan},
   ];
   const ROW2_XA = [85, 175, 265];
   const ROW2_XB = [815, 725, 635];
-  const extraNodesA = pcsA.slice(1).map((pc, i) => ({x:ROW2_XA[i], y:ROW2_Y, label:pc.name, ip:pc.ip, mac:pc.mac, key:pc.key, shape:"pc"}));
-  const extraNodesB = pcsB.slice(1).map((pc, i) => ({x:ROW2_XB[i], y:ROW2_Y, label:pc.name, ip:pc.ip, mac:pc.mac, key:pc.key, shape:"pc"}));
+  const extraNode = (pc, x) => ({x, y:ROW2_Y, label:pc.name, ip:pc.ip, mac:pc.mac, key:pc.key, shape:"pc", color:pc.color, vlan:pc.vlan});
+  const extraNodesA = pcsA.slice(1).map((pc, i) => extraNode(pc, ROW2_XA[i]));
+  const extraNodesB = pcsB.slice(1).map((pc, i) => extraNode(pc, ROW2_XB[i]));
   const allNodes = [...mainNodes, ...extraNodesA, ...extraNodesB];
 
   const isActive   = k => activeSide===k||(activeSide==="transit_a"&&k==="switchA")||(activeSide==="transit_b"&&k==="switchB");
   const isSelected = k => selectedDevice===k;
   const dotX = 85 + pos * (815 - 85);
-  const lanALabel = `LAN-A · ${lanA.network}/${lanA.cidr}${vlanEnabled?`  · VLAN ${lanA.vlan}`:"  · DHCP: "+lanA.gateway}  ·  DNS: 8.8.8.8`;
-  const lanBLabel = `LAN-B · ${lanB.network}/${lanB.cidr}${vlanEnabled?`  · VLAN ${lanB.vlan}`:"  · DHCP: "+lanB.gateway}  ·  DNS: 8.8.8.8`;
+  const lanLabel = (lan, name) => vlanEnabled
+    ? `${name} · VLAN${lan.vlans.length>1?"s":""} ${vlanIdsLabel(lan)}  ·  DNS: 8.8.8.8`
+    : `${name} · ${lan.network}/${lan.cidr}  · DHCP: ${lan.gateway}  ·  DNS: 8.8.8.8`;
+  const lanALabel = lanLabel(lanA, "LAN-A");
+  const lanBLabel = lanLabel(lanB, "LAN-B");
 
-  function NodeG({n}) {
+  function vlanBadges(lan, x0) {
+    return lan.vlans.map((v, i) => (
+      <g key={v.id}>
+        <rect x={x0+i*110} y="35" width="104" height="11" rx="3" fill={`${v.color}22`} stroke={`${v.color}88`} strokeWidth="0.6"/>
+        <text x={x0+i*110+52} y="43" fontSize="7" fill={v.color} textAnchor="middle" fontFamily="'JetBrains Mono',monospace" fontWeight="700">
+          VLAN {v.id} · {v.network}/{v.cidr}
+        </text>
+      </g>
+    ));
+  }
+
+  function renderNode(n) {
     const active = isActive(n.key), selected = isSelected(n.key);
-    const c  = selected?"#f2c36b":active?"#42d9b8":"rgba(255,255,255,0.28)";
+    const idle = vlanEnabled && n.color ? `${n.color}bb` : "rgba(255,255,255,0.28)";
+    const c  = selected?"#f2c36b":active?"#42d9b8":idle;
     const bg = selected?"rgba(242,195,107,0.14)":active?"rgba(66,217,184,0.14)":"rgba(13,19,30,0.95)";
     const sw = selected||active?2.5:1;
     return (
@@ -620,6 +750,10 @@ function TopologyDiagram({ pos, activeSide, selectedDevice, onSelectDevice, cfg 
         <text x={n.x} y={n.y+36} textAnchor="middle" fontSize="10" fontWeight={active||selected?"700":"500"} fill={selected?"#f2c36b":active?"#42d9b8":"rgba(241,245,249,0.8)"} fontFamily="Inter,sans-serif">{n.label}</text>
         <text x={n.x} y={n.y+48} textAnchor="middle" fontSize="8" fill={active||selected?"rgba(241,245,249,0.7)":"rgba(241,245,249,0.42)"} fontFamily="'JetBrains Mono',monospace">{n.ip}</text>
         {n.mac&&<text x={n.x} y={n.y+59} textAnchor="middle" fontSize="7.5" fill="rgba(241,245,249,0.26)" fontFamily="'JetBrains Mono',monospace">{n.mac.slice(0,17)}</text>}
+        {vlanEnabled&&n.vlan!=null&&<>
+          <rect x={n.x+12} y={n.y-31} width={30} height={12} rx={6} fill="rgba(13,19,30,0.95)" stroke={n.color} strokeWidth={1}/>
+          <text x={n.x+27} y={n.y-22} textAnchor="middle" fontSize="7.5" fontWeight="700" fill={n.color} fontFamily="'JetBrains Mono',monospace">V{n.vlan}</text>
+        </>}
       </g>
     );
   }
@@ -630,19 +764,19 @@ function TopologyDiagram({ pos, activeSide, selectedDevice, onSelectDevice, cfg 
       <svg viewBox={`0 0 900 ${svgHeight}`} className="osi-topo-svg">
         <rect x="6"   y="18" width="344" height={lanAHeight} rx="12" fill="rgba(99,179,237,0.05)" stroke="rgba(99,179,237,0.2)" strokeWidth="1"/>
         <text x="16"  y="31" fontSize="9" fill="#63b3ed" fontFamily="'JetBrains Mono',monospace" fontWeight="600" letterSpacing="0.4">{lanALabel}</text>
-        {vlanEnabled && <rect x="12" y="34" width="88" height="10" rx="3" fill="rgba(99,179,237,0.15)" stroke="rgba(99,179,237,0.4)" strokeWidth="0.5"/>}
-        {vlanEnabled && <text x="56" y="41" fontSize="7" fill="#63b3ed" textAnchor="middle" fontFamily="'JetBrains Mono',monospace" fontWeight="700">VLAN {lanA.vlan}</text>}
+        {vlanEnabled && vlanBadges(lanA, 14)}
         <rect x="550" y="18" width="344" height={lanBHeight} rx="12" fill="rgba(66,217,184,0.05)" stroke="rgba(66,217,184,0.2)" strokeWidth="1"/>
         <text x="560" y="31" fontSize="9" fill="#42d9b8" fontFamily="'JetBrains Mono',monospace" fontWeight="600" letterSpacing="0.4">{lanBLabel}</text>
-        {vlanEnabled && <rect x="556" y="34" width="88" height="10" rx="3" fill="rgba(66,217,184,0.15)" stroke="rgba(66,217,184,0.4)" strokeWidth="0.5"/>}
-        {vlanEnabled && <text x="600" y="41" fontSize="7" fill="#42d9b8" textAnchor="middle" fontFamily="'JetBrains Mono',monospace" fontWeight="700">VLAN {lanB.vlan}</text>}
+        {vlanEnabled && vlanBadges(lanB, 558)}
         <rect x="378" y="30" width="134" height="100" rx="10" fill="rgba(251,146,60,0.05)" stroke="rgba(251,146,60,0.25)" strokeWidth="1"/>
         <line x1="85" y1="78" x2="815" y2="78" stroke="rgba(255,255,255,0.1)" strokeWidth="2"/>
+        {vlanEnabled && lanA.vlans.length>1 && <text x="330" y="72" textAnchor="middle" fontSize="7.5" fill="rgba(241,245,249,0.5)" fontFamily="'JetBrains Mono',monospace">802.1Q trunk</text>}
+        {vlanEnabled && lanB.vlans.length>1 && <text x="560" y="72" textAnchor="middle" fontSize="7.5" fill="rgba(241,245,249,0.5)" fontFamily="'JetBrains Mono',monospace">802.1Q trunk</text>}
         {nExtraA>0 && <path fill="none" stroke="rgba(99,179,237,0.35)" strokeWidth="1.5" strokeDasharray="4 3"
           d={`M275 98 L300 123 L300 152 L${Math.min(...extraNodesA.map(n=>n.x))} 152 ${extraNodesA.map(n=>`M${n.x} 152 L${n.x} 162`).join(" ")}`}/>}
         {nExtraB>0 && <path fill="none" stroke="rgba(66,217,184,0.35)" strokeWidth="1.5" strokeDasharray="4 3"
           d={`M615 98 L590 123 L590 152 L${Math.max(...extraNodesB.map(n=>n.x))} 152 ${extraNodesB.map(n=>`M${n.x} 152 L${n.x} 162`).join(" ")}`}/>}
-        {allNodes.map(n=><NodeG key={n.key} n={n}/>)}
+        {allNodes.map(renderNode)}
         <g style={{transform:`translateX(${dotX-85}px)`,transition:"transform 0.5s ease-in-out"}}>
           <circle cx={85} cy={78} r={14} fill="rgba(66,217,184,0.12)"/>
           <circle cx={85} cy={78} r={8}  fill="rgba(66,217,184,0.35)"/>
@@ -694,6 +828,12 @@ function DeviceInspector({ deviceKey, si, cfg, DEVICES, bootLogs, onClose }) {
   const switchUp = stepAtOrPast(si,"switch_init");
   const cfgA     = stepAtOrPast(si,"pca_dhcp");
   const cfgB     = stepAtOrPast(si,"pcb_dhcp");
+  const pcA_     = cfg.pcsA.find(p=>p.key===deviceKey);
+  const pc       = pcA_ || cfg.pcsB.find(p=>p.key===deviceKey);
+  const pcSide   = pcA_ ? "A" : "B";
+  const swSide   = deviceKey==="switchA" ? "A" : deviceKey==="switchB" ? "B" : null;
+  const swLan    = swSide==="B" ? cfg.lanB : cfg.lanA;
+  const swPcs    = swSide==="B" ? cfg.pcsB : cfg.pcsA;
 
   return (
     <div className="osi-di">
@@ -712,34 +852,18 @@ function DeviceInspector({ deviceKey, si, cfg, DEVICES, bootLogs, onClose }) {
       {tab==="bootlog" && <BootLogTab deviceKey={deviceKey} si={si} bootLogs={bootLogs}/>}
 
       {tab==="tables" && <div className="osi-di-body">
-        {/* LAN-A PCs */}
-        {cfg.pcsA.some(p=>p.key===deviceKey)&&<>
+        {pc&&<>
           <div className="osi-di-col">
             <div className="osi-di-section">Network Configuration</div>
-            {cfgA
+            {(pcSide==="A"?cfgA:cfgB)
               ? <DiTable cols={["Parameter","Value"]} rows={(DEVICES[deviceKey]?.rows||[]).map(r=>[r.k,r.v])} empty=""/>
               : <p className="osi-di-empty">Not yet configured — DHCP has not completed</p>}
           </div>
           <div className="osi-di-col">
             <div className="osi-di-section">ARP Cache</div>
-            <DiTable cols={["IP Address","MAC Address","Host"]} rows={arp.pcA.map(r=>[r.ip,r.mac,r.host])} empty="Empty — ARP not yet resolved"/>
+            <DiTable cols={["IP Address","MAC Address","Host"]} rows={getPcArp(pc,pcSide,si).map(r=>[r.ip,r.mac,r.host])} empty="Empty — ARP not yet resolved"/>
             <div className="osi-di-section" style={{marginTop:14}}>Routing Table</div>
-            <DiTable cols={["Destination","Next Hop","Interface","Type"]} rows={getPcRoutes("A",si,cfg).map(r=>[r.dst,r.nh,r.iface,r.type])} empty="No routes — waiting for DHCP"/>
-          </div>
-        </>}
-        {/* LAN-B PCs */}
-        {cfg.pcsB.some(p=>p.key===deviceKey)&&<>
-          <div className="osi-di-col">
-            <div className="osi-di-section">Network Configuration</div>
-            {cfgB
-              ? <DiTable cols={["Parameter","Value"]} rows={(DEVICES[deviceKey]?.rows||[]).map(r=>[r.k,r.v])} empty=""/>
-              : <p className="osi-di-empty">Not yet configured — DHCP has not completed</p>}
-          </div>
-          <div className="osi-di-col">
-            <div className="osi-di-section">ARP Cache</div>
-            <DiTable cols={["IP Address","MAC Address","Host"]} rows={arp.pcB.map(r=>[r.ip,r.mac,r.host])} empty="Empty — ARP not yet resolved"/>
-            <div className="osi-di-section" style={{marginTop:14}}>Routing Table</div>
-            <DiTable cols={["Destination","Next Hop","Interface","Type"]} rows={getPcRoutes("B",si,cfg).map(r=>[r.dst,r.nh,r.iface,r.type])} empty="No routes — waiting for DHCP"/>
+            <DiTable cols={["Destination","Next Hop","Interface","Type"]} rows={getPcRoutes(pc,pcSide,si).map(r=>[r.dst,r.nh,r.iface,r.type])} empty="No routes — waiting for DHCP"/>
           </div>
         </>}
         {/* Router */}
@@ -752,8 +876,8 @@ function DeviceInspector({ deviceKey, si, cfg, DEVICES, bootLogs, onClose }) {
             <div className="osi-di-section" style={{marginTop:14}}>Interfaces</div>
             <DiTable cols={["Interface","IP","MAC","State"]}
               rows={routerUp?[
-                ["LAN-A (eth0)",`${cfg.router.lanAIp}/${cfg.lanA.cidr}`,MACS.rtrA,"UP"],
-                ["LAN-B (eth1)",`${cfg.router.lanBIp}/${cfg.lanB.cidr}`,MACS.rtrB,"UP"],
+                ...cfg.lanA.vlans.map(v=>[`LAN-A (${v.iface})`,`${v.gateway}/${v.cidr}`,MACS.rtrA,"UP"]),
+                ...cfg.lanB.vlans.map(v=>[`LAN-B (${v.iface})`,`${v.gateway}/${v.cidr}`,MACS.rtrB,"UP"]),
               ]:[]} empty="Interfaces down"/>
           </div>
           <div className="osi-di-col">
@@ -763,39 +887,28 @@ function DeviceInspector({ deviceKey, si, cfg, DEVICES, bootLogs, onClose }) {
             <DiTable cols={["IP","MAC","Host","Interface","Lease"]} rows={getDhcpLeases(si,cfg).map(r=>[r.ip,r.mac,r.host,r.iface,r.lease])} empty="No leases yet"/>
           </div>
         </>}
-        {/* Switch-A */}
-        {deviceKey==="switchA"&&<>
+        {swSide&&<>
           <div className="osi-di-col">
             <div className="osi-di-section">MAC Address Table</div>
             <DiTable cols={["MAC Address","Port","Host","VLAN","Type"]}
-              rows={getSwitchAMac(si,cfg).map(r=>[r.mac,r.port,r.host,r.vlan,r.type])}
+              rows={getSwitchMac(si,cfg,swSide).map(r=>[r.mac,r.port,r.host,r.vlan,r.type])}
               empty={switchUp?"Empty — no traffic yet":"Switch not initialized"}/>
+            {cfg.vlanEnabled&&<>
+              <div className="osi-di-section" style={{marginTop:14}}>Port VLAN Assignment</div>
+              <DiTable cols={["Port","Mode","VLAN","Device"]} rows={switchUp?[
+                ...swPcs.map((p,i)=>[`Fa0/${i+1}`,"Access",p.vlan,p.name]),
+                ["Fa0/24",swLan.vlans.length>1?"Trunk (802.1Q)":"Tagged",vlanIdsLabel(swLan),"Router"],
+              ]:[]} empty="Switch not initialized"/>
+            </>}
           </div>
           <div className="osi-di-col">
             <div className="osi-di-section">STP / Port State</div>
             <DiTable cols={["Property","Value"]} rows={switchUp?[
               ["Role","Root Bridge"],["All ports","Forwarding"],
               ["BPDU","Sent during boot"],["IP Address","None (L2 only)"],
-              ["Unknown frames","Flooded to all ports"],["Broadcast","Flooded to all ports"],
-              ...(cfg.vlanEnabled?[["VLAN mode",`Access, VLAN ${cfg.lanA.vlan}`]]:[]),
-            ]:[["Status","Not initialized"]]} empty=""/>
-          </div>
-        </>}
-        {/* Switch-B */}
-        {deviceKey==="switchB"&&<>
-          <div className="osi-di-col">
-            <div className="osi-di-section">MAC Address Table</div>
-            <DiTable cols={["MAC Address","Port","Host","VLAN","Type"]}
-              rows={getSwitchBMac(si,cfg).map(r=>[r.mac,r.port,r.host,r.vlan,r.type])}
-              empty={switchUp?"Empty — no traffic yet":"Switch not initialized"}/>
-          </div>
-          <div className="osi-di-col">
-            <div className="osi-di-section">STP / Port State</div>
-            <DiTable cols={["Property","Value"]} rows={switchUp?[
-              ["Role","Root Bridge"],["All ports","Forwarding"],
-              ["BPDU","Sent during boot"],["IP Address","None (L2 only)"],
-              ["Unknown frames","Flooded to all ports"],["Broadcast","Flooded to all ports"],
-              ...(cfg.vlanEnabled?[["VLAN mode",`Access, VLAN ${cfg.lanB.vlan}`]]:[]),
+              ["Unknown frames",cfg.vlanEnabled?"Flooded within the same VLAN only":"Flooded to all ports"],
+              ["Broadcast",cfg.vlanEnabled?"Stays inside its VLAN (separate broadcast domains)":"Flooded to all ports"],
+              ...(cfg.vlanEnabled&&swLan.vlans.length>1?[["Inter-VLAN traffic","Must go up the trunk to the router and back"]]:[]),
             ]:[["Status","Not initialized"]]} empty=""/>
           </div>
         </>}
@@ -909,7 +1022,7 @@ function DevicePanel({ activeSide, DEVICES }) {
 function ArpPanel({ si, activeSide, cfg }) {
   const arp = getArpState(si, cfg);
   const showPcA=activeSide==="A", showPcB=activeSide==="B";
-  const table = showPcA?arp.pcA:showPcB?arp.pcB:arp.router;
+  const table = showPcA?getPcArp(cfg.pcA,"A",si):showPcB?getPcArp(cfg.pcB,"B",si):arp.router;
   const title = showPcA?"PC-A ARP Cache":showPcB?"PC-B ARP Cache":"Router ARP Table";
   const cols  = showPcA||showPcB?["IP Address","MAC Address","Host"]:["IP Address","MAC Address","Interface"];
   return (
