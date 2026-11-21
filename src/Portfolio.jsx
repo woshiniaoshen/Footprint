@@ -21,7 +21,7 @@ const projects = [
   {
     name: "OSI Layer Explorer",
     type: "Teaching tool",
-    summary: "Steps through how a packet crosses all seven OSI layers between two LANs, showing each header as it is added and removed. Includes a topology builder for switches, routers, VLAN trunks, DHCP and NAT that can replay a full web request (DHCP, ARP, DNS, the TCP handshake and HTTP) run traceroute, and step through Dijkstra and distance-vector routing.",
+    summary: "Steps through how a packet crosses all seven OSI layers between two LANs, showing each header as it is added and removed. Includes a topology builder for switches, routers, VLAN trunks, DHCP and NAT that can replay a full web request (DHCP, ARP, DNS, the TCP handshake and HTTP) run traceroute, and step through Dijkstra and distance-vector routing, plus a transport lab for rdt, Go-Back-N and Selective Repeat.",
     stack: ["React", "Networking", "VLANs"],
     links: [{ label: "Open explorer", href: "/osi/" }],
   },
