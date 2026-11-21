@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import "./osi.css";
+import TopologyBuilder from "./TopologyBuilder.jsx";
 
 // ── Subnet math ───────────────────────────────────────────────────────────────
 function ipToNum(ip) { return ip.split(".").reduce((a,o)=>(a<<8)+parseInt(o),0)>>>0; }
@@ -1057,7 +1058,17 @@ export default function OSIExplorer() {
   const [step,     setStep]     = useState(0);
   const [playing,  setPlaying]  = useState(false);
   const [selDev,   setSelDev]   = useState(null);
+  const [mode,     setMode]     = useState(() => window.location.hash === "#builder" ? "builder" : "walk");
   const timer = useRef(null);
+  const modeRef = useRef(mode);
+  useEffect(() => { modeRef.current = mode; }, [mode]);
+
+  function switchMode(m) {
+    setMode(m);
+    setPlaying(false);
+    setShowCfg(false);
+    history.replaceState(null, "", m === "builder" ? "#builder" : window.location.pathname);
+  }
 
   const cfg      = useMemo(()=>buildCfg(inputCfg),   [inputCfg]);
   const HF       = useMemo(()=>buildHF(cfg),          [cfg]);
@@ -1091,6 +1102,7 @@ export default function OSIExplorer() {
 
   useEffect(()=>{
     const fn=e=>{
+      if(modeRef.current!=="walk"||["INPUT","SELECT","TEXTAREA"].includes(e.target.tagName)) return;
       if(e.key==="ArrowRight"){setPlaying(false);setStep(s=>Math.min(STEPS.length-1,s+1));}
       if(e.key==="ArrowLeft") {setPlaying(false);setStep(s=>Math.max(0,s-1));}
     };
@@ -1119,19 +1131,29 @@ export default function OSIExplorer() {
           <div className="osi-logo-mark">OSI</div>
           <div>
             <h1>Layer Explorer</h1>
-            <p>Trace an HTTP connection from PC to PC through every layer</p>
+            <p>{mode==="walk"
+              ? "Trace an HTTP connection from PC to PC through every layer"
+              : "Build your own network and watch a packet find its way"}</p>
           </div>
         </div>
-        <div style={{display:"flex",gap:8,alignItems:"center"}}>
-          <button className={`osi-cfg-btn${showCfg?" osi-cfg-btn-active":""}`}
-            onClick={()=>{ setDraft(inputCfg); setShowCfg(v=>!v); }}>
-            ⚙ Configure
-          </button>
+        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          <div className="osi-modes" role="tablist">
+            <button role="tab" aria-selected={mode==="walk"} className={`osi-mode${mode==="walk"?" on":""}`} onClick={()=>switchMode("walk")}>Walkthrough</button>
+            <button role="tab" aria-selected={mode==="builder"} className={`osi-mode${mode==="builder"?" on":""}`} onClick={()=>switchMode("builder")}>Topology builder</button>
+          </div>
+          {mode==="walk" && (
+            <button className={`osi-cfg-btn${showCfg?" osi-cfg-btn-active":""}`}
+              onClick={()=>{ setDraft(inputCfg); setShowCfg(v=>!v); }}>
+              ⚙ Configure
+            </button>
+          )}
           <a href="/" className="osi-back">← Portfolio</a>
         </div>
       </header>
 
-      {showCfg && (
+      {mode==="builder" && <main className="osi-main"><TopologyBuilder/></main>}
+
+      {mode==="walk" && showCfg && (
         <NetworkConfigPanel
           draft={draft} setDraft={setDraft}
           onApply={applyConfig} onReset={resetConfig}
@@ -1139,7 +1161,7 @@ export default function OSIExplorer() {
         />
       )}
 
-      <main className="osi-main">
+      {mode==="walk" && <main className="osi-main">
         <TopologyDiagram pos={cur.pos} activeSide={cur.side} selectedDevice={selDev}
           onSelectDevice={setSelDev} cfg={cfg}/>
 
@@ -1199,7 +1221,7 @@ export default function OSIExplorer() {
             ))}
           </div>
         </section>
-      </main>
+      </main>}
 
       <footer className="osi-footer">
         <span>OSI Layer Explorer · Nelson Tan</span>

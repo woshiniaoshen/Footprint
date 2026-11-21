@@ -206,6 +206,7 @@ export default function Portfolio() {
               <li>20-step animated journey through all 7 OSI layers</li>
               <li>Shows encapsulation and decapsulation header-by-header</li>
               <li>Explains the router's Layer 2 / Layer 3 boundary role</li>
+              <li>Topology builder: wire up PCs, switches and routers, then trace a packet hop by hop</li>
               <li>Keyboard navigation and auto-play mode</li>
             </ul>
             <div className="project-actions">
