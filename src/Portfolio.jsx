@@ -92,7 +92,10 @@ export default function Portfolio() {
     <div className="page">
       <header className="site-header">
         <div className="container header-inner">
-          <a className="wordmark" href="#top">Nelson Tan</a>
+          <a className="wordmark" href="#top" aria-label="Nelson Tan, home">
+            <span className="monogram" aria-hidden="true">NT</span>
+            Nelson Tan
+          </a>
           <nav aria-label="Main navigation">
             <a href="#projects">Projects</a>
             <a href="#experience">Experience</a>

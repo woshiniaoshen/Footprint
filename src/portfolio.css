@@ -64,7 +64,20 @@ p { margin: 0; }
   border-bottom: 1px solid var(--line);
 }
 .header-inner { height: 60px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.wordmark { font-weight: 600; font-size: 15px; }
+.wordmark { display: inline-flex; align-items: center; gap: 10px; font-weight: 600; font-size: 15px; }
+.monogram {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
 .site-header nav { display: flex; gap: 24px; font-size: 14px; color: var(--muted); }
 .site-header nav a:hover { color: var(--text); }
 
