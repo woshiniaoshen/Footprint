@@ -6,12 +6,15 @@ import {
   linkIsTrunk, accessVlanOf, usesVlans, NATIVE_VLAN,
   emptyTables, mergeLearned, arpTableOf, macTableOf,
   applyDhcp, dhcpTrace, poolConfig, parsePool, defaultPool,
+  isServer, webRequest, parseUrl,
 } from "./topoEngine.js";
 import "./topology.css";
 
 const STORAGE_KEY = "osi-topology-v1";
 const VIEW_W = 1000, VIEW_H = 460;
-const TYPE_COLOR = { pc:"#63b3ed", switch:"#42d9b8", router:"#fb923c" };
+const TYPE_COLOR = { pc:"#63b3ed", switch:"#42d9b8", router:"#fb923c", server:"#a78bfa" };
+const colorOf = d => (isServer(d) ? TYPE_COLOR.server : TYPE_COLOR[d.type]);
+const STAGES = ["DHCP", "DNS", "TCP", "HTTP"];
 const KIND_ICON = { route:"🧭", arp:"❓", send:"📤", switch:"🔀", arrive:"📥", deliver:"✅", drop:"⛔" };
 const VLAN_PALETTE = ["#63b3ed", "#f2c36b", "#a78bfa", "#f472b6", "#4ade80", "#fb923c"];
 const vlanColor = v => (v && v !== NATIVE_VLAN ? VLAN_PALETTE[v % VLAN_PALETTE.length] : null);
@@ -26,6 +29,10 @@ function loadSaved() {
 
 function DeviceIcon({ d, color }) {
   const { x, y } = d;
+  if (isServer(d)) return <>
+    <rect x={x-9} y={y-13} width={18} height={26} rx={2} fill="none" stroke={color} strokeWidth={1.6}/>
+    <path d={`M${x-6} ${y-6} h12 M${x-6} ${y} h12 M${x-6} ${y+6} h12`} stroke={color} strokeWidth={1.2}/>
+  </>;
   if (d.type === "pc") return <>
     <rect x={x-11} y={y-12} width={22} height={15} rx={2} fill="none" stroke={color} strokeWidth={1.6}/>
     <line x1={x-6} y1={y+7} x2={x+6} y2={y+7} stroke={color} strokeWidth={1.6}/>
@@ -55,6 +62,8 @@ export default function TopologyBuilder() {
   const [pings, setPings]     = useState([]);
   const [tables, setTables]   = useState(emptyTables);
   const [panel, setPanel]     = useState("log");
+  const [sendMode, setSendMode] = useState("web");
+  const [url, setUrl]         = useState("www.cs204.edu");
   const svgRef  = useRef(null);
   const drag    = useRef(null);
   const listRef = useRef(null);
@@ -89,9 +98,9 @@ export default function TopologyBuilder() {
         if (i >= stepCount - 1) { setPlaying(false); return i; }
         return i + 1;
       });
-    }, 1100);
+    }, result?.kind === "web" ? 550 : 1100);
     return () => clearInterval(t);
-  }, [playing, stepCount]);
+  }, [playing, stepCount, result?.kind]);
 
   function edit(fn) {
     setTopo(t => { const c = structuredClone(t); fn(c); return c; });
@@ -103,7 +112,12 @@ export default function TopologyBuilder() {
   function addDevice(type) {
     const n = topo.devices.length;
     const x = 120 + ((n * 137) % 760), y = 90 + ((n * 89) % 280);
-    const d = makeDevice(type, nextNum(topo, type), x, y);
+    const server = type === "server";
+    const d = makeDevice(server ? "pc" : type, nextNum(topo, server ? "pc" : type), x, y);
+    if (server) {
+      d.name = `SRV${topo.devices.filter(isServer).length + 1}`;
+      d.services = { web:{ title:"My website" } };
+    }
     edit(t => { t.devices.push(structuredClone(d)); });
     setSel({ kind:"dev", id:d.id });
     setMsg(`Added ${type}. Drag it into place, then use Connect to cable it.`);
@@ -204,6 +218,24 @@ export default function TopologyBuilder() {
     setView("fwd"); setSi(0); setPlaying(true);
   }
 
+  function runWeb(pcId = srcId, address = url) {
+    const pc = deviceById(live, pcId);
+    if (!pc) return;
+    const run = webRequest(topo, live, leases, pcId, address);
+    const n = (pings[0]?.n || 0) + 1;
+    const failed = run.stages.find(s => !s.ok);
+    setTables(t => mergeLearned(t, run.learned, n));
+    setPings(p => [{
+      n, type:"Web", time: stamp(), srcId: pcId, url: address, web:true,
+      from: pc.name, to: parseUrl(address)?.host || address,
+      fwdOk: run.ok, revOk: null, routers: null, ttl: null,
+      reason: run.ok ? `Loaded “${run.title}”` : `Failed at ${failed?.name ?? "start"} — ${run.reason}`,
+    }, ...p].slice(0, 50));
+    setSrc(pcId); setUrl(address);
+    setResult({ fwd: run, rev: null, kind:"web" });
+    setView("fwd"); setSi(0); setPlaying(true);
+  }
+
   function loadPreset(id) {
     if (!id) return;
     if (topo.devices.length && !window.confirm("Replace the current topology with this preset?")) return;
@@ -228,6 +260,7 @@ export default function TopologyBuilder() {
           <button className="tb-btn" onClick={() => addDevice("pc")}>+ PC</button>
           <button className="tb-btn" onClick={() => addDevice("switch")}>+ Switch</button>
           <button className="tb-btn" onClick={() => addDevice("router")}>+ Router</button>
+          <button className="tb-btn" onClick={() => addDevice("server")}>+ Server</button>
         </div>
         <div className="tb-group">
           <button className={`tb-btn${tool === "select" ? " tb-on" : ""}`} onClick={() => { setTool("select"); setPending(null); setMsg(""); }}>↖ Move</button>
@@ -290,7 +323,7 @@ export default function TopologyBuilder() {
             })}
 
             {live.devices.map(d => {
-              const color = TYPE_COLOR[d.type];
+              const color = colorOf(d);
               const hot = hotDevs.has(d.id), picked = sel?.kind === "dev" && sel.id === d.id;
               const isPending = pending === d.id;
               const hasIssue = issues.some(p => p.dev === d.id && p.level === "error");
@@ -307,6 +340,11 @@ export default function TopologyBuilder() {
                   {d.type === "pc" && (
                     <text x={d.x} y={d.y + 50} textAnchor="middle" className={`tb-devip${d.lease?.apipa ? " tb-apipa" : ""}`}>
                       {d.ports[0].addr || "no IP"}{d.dhcp ? (d.lease?.apipa ? " · APIPA" : " · DHCP") : ""}
+                    </text>
+                  )}
+                  {isServer(d) && (
+                    <text x={d.x} y={d.y + 61} textAnchor="middle" className="tb-devip" style={{ fill:TYPE_COLOR.server }}>
+                      {[d.services.web && "web :80", d.services.dns && "dns :53"].filter(Boolean).join(" · ")}
                     </text>
                   )}
                   {d.type === "router" && ifs.map((f, k) => (
@@ -354,7 +392,7 @@ export default function TopologyBuilder() {
               Device tables
             </button>
           </div>
-          {panel === "log" && <PingLog pings={pings} onReplay={p => (p.dhcp ? runDhcp(p.srcId) : runTrace(p.srcId, p.dstIp))} onClear={() => setPings([])}/>}
+          {panel === "log" && <PingLog pings={pings} onReplay={p => (p.web ? runWeb(p.srcId, p.url) : p.dhcp ? runDhcp(p.srcId) : runTrace(p.srcId, p.dstIp))} onClear={() => setPings([])}/>}
           {panel === "hops" && <HopTable topo={live} run={run} view={view} si={si}
             onPick={i => { setPlaying(false); setSi(i); }}/>}
           {panel === "tables" && <DeviceTables topo={live} tables={tables} leases={leases}
@@ -378,24 +416,52 @@ export default function TopologyBuilder() {
           {selLink && <LinkInspector l={selLink} topo={topo} onDelete={deleteSelected}/>}
 
           <div className="tb-card">
-            <div className="tb-card-title">📦 Send a packet</div>
+            <div className="tb-card-title">📦 Send traffic</div>
+            <div className="tb-seg" role="tablist" aria-label="Traffic type">
+              <button role="tab" aria-selected={sendMode === "web"} className={sendMode === "web" ? "on" : ""} onClick={() => setSendMode("web")}>🌐 Open website</button>
+              <button role="tab" aria-selected={sendMode === "ping"} className={sendMode === "ping" ? "on" : ""} onClick={() => setSendMode("ping")}>📶 Ping</button>
+            </div>
             <label className="tb-field">From
               <select value={srcId} onChange={e => { setSrc(e.target.value); setResult(null); }}>
                 {pcs.length === 0 && <option value="">Add a PC first</option>}
                 {pcs.map(p => <option key={p.id} value={p.id}>{p.name} · {p.ports[0].addr || "no IP"}</option>)}
               </select>
             </label>
-            <label className="tb-field">To
-              <select value={dstIp} onChange={e => { setDst(e.target.value); setResult(null); }}>
-                {targets.length === 0 && <option value="">No addressed devices</option>}
-                {targets.map(t => <option key={t.label} value={t.ip}>{t.label}</option>)}
-              </select>
-            </label>
-            <button className="tb-run" disabled={!srcId || !dstIp} onClick={() => runTrace()}>▶ Send ping</button>
+            {sendMode === "ping" ? <>
+              <label className="tb-field">To
+                <select value={dstIp} onChange={e => { setDst(e.target.value); setResult(null); }}>
+                  {targets.length === 0 && <option value="">No addressed devices</option>}
+                  {targets.map(t => <option key={t.label} value={t.ip}>{t.label}</option>)}
+                </select>
+              </label>
+              <button className="tb-run" disabled={!srcId || !dstIp} onClick={() => runTrace()}>▶ Send ping</button>
+            </> : <>
+              <label className="tb-field">Web address
+                <input value={url} placeholder="www.cs204.edu" onChange={e => setUrl(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter" && srcId && url.trim()) runWeb(); }}/>
+              </label>
+              <button className="tb-run" disabled={!srcId || !url.trim()} onClick={() => runWeb()}>▶ Open website</button>
+              <p className="tb-note">Runs everything a browser needs: DHCP → ARP → DNS → TCP handshake → HTTP.</p>
+            </>}
+
+            {result?.kind === "web" && (
+              <div className="tb-stages">
+                {STAGES.map(name => {
+                  const st = result.fwd.stages.find(s => s.name === name);
+                  const first = result.fwd.steps.findIndex(s => s.stage === name);
+                  return (
+                    <button key={name} disabled={first < 0} className={`tb-stage ${st ? (st.ok ? "ok" : "bad") : "skip"}`}
+                      onClick={() => { setPlaying(false); setSi(first); }} title={first < 0 ? "Not reached" : `Jump to ${name}`}>
+                      {st ? (st.ok ? "✓" : "✗") : "·"} {name}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
 
             {result && (
               <>
-                <div className="tb-verdicts">
+                {result.kind !== "web" && <div className="tb-verdicts">
                   <button className={`tb-verdict ${result.fwd.ok ? "ok" : "bad"}${view === "fwd" ? " on" : ""}`}
                     onClick={() => { setView("fwd"); setSi(0); setPlaying(false); }}>
                     {result.fwd.ok ? "✓" : "✗"} {result.kind === "dhcp" ? "DHCP lease" : "Request"}
@@ -406,7 +472,12 @@ export default function TopologyBuilder() {
                       {result.rev.ok ? "✓" : "✗"} Reply
                     </button>
                   )}
-                </div>
+                </div>}
+                {result.kind === "web" && (
+                  <p className={`tb-webresult ${result.fwd.ok ? "ok" : "bad"}`}>
+                    {result.fwd.ok ? `✓ Page loaded: “${result.fwd.title}”` : `✗ ${result.fwd.reason}`}
+                  </p>
+                )}
                 {result.rev && !result.rev.ok && view === "fwd" && (
                   <p className="tb-note">The request arrives, but the reply is dropped — open “Reply” to see where.</p>
                 )}
@@ -428,7 +499,8 @@ export default function TopologyBuilder() {
                           <tr><th>L3 src IP</th><td>{step.frame.srcIp}</td></tr>
                           <tr><th>L3 dst IP</th><td>{step.frame.dstIp}</td></tr>
                           <tr><th>TTL</th><td>{step.frame.ttl}</td></tr>
-                          {step.frame.app && <tr><th>Payload</th><td>{step.frame.app}</td></tr>}
+                          {step.frame.l4 && <tr><th>Transport</th><td>{step.frame.l4}</td></tr>}
+                          {step.frame.app && <tr><th>Application</th><td>{step.frame.app}</td></tr>}
                           {vlanMode && (
                             <tr><th>802.1Q</th><td style={vlanColor(step.frame.tag ?? step.frame.vlan) ? { color:vlanColor(step.frame.tag ?? step.frame.vlan) } : undefined}>
                               {step.frame.tag !== null && step.frame.tag !== undefined
@@ -445,7 +517,9 @@ export default function TopologyBuilder() {
                   {run.steps.map((s, i) => (
                     <li key={i} className={`${i === si ? "on" : ""} ${i > si ? "future" : ""} k-${s.kind}`}
                       onClick={() => { setPlaying(false); setSi(i); }}>
-                      <span>{KIND_ICON[s.kind]}</span>{s.title}
+                      <span>{KIND_ICON[s.kind]}</span>
+                      {s.stage && <em className={`tb-stagetag st-${s.stage}`}>{s.stage}</em>}
+                      {s.title}
                     </li>
                   ))}
                 </ol>
@@ -475,13 +549,15 @@ function peerText(topo, d, i) {
 
 function Inspector({ d, topo, live, edit, onDhcp }) {
   const set = fn => edit(t => fn(deviceById(t, d.id)));
-  const color = TYPE_COLOR[d.type];
+  const color = colorOf(d);
   const ld = deviceById(live, d.id);
   const lease = ld?.lease;
+  const svc = d.services || {};
+  const setSvc = fn => set(x => { x.services = x.services || {}; fn(x.services); if (!x.services.dns && !x.services.web) delete x.services; });
   return (
     <div className="tb-card">
       <div className="tb-card-title" style={{ color }}>
-        {d.type === "pc" ? "🖥 PC" : d.type === "switch" ? "🔀 Switch" : "🧭 Router"} · {d.name}
+        {isServer(d) ? "🗄 Server" : d.type === "pc" ? "🖥 PC" : d.type === "switch" ? "🔀 Switch" : "🧭 Router"} · {d.name}
       </div>
       <Field label="Name" value={d.name} onChange={v => set(x => { x.name = v; })}/>
 
@@ -489,7 +565,7 @@ function Inspector({ d, topo, live, edit, onDhcp }) {
         <div className="tb-seg" role="radiogroup" aria-label="Address assignment">
           <button role="radio" aria-checked={!d.dhcp} className={!d.dhcp ? "on" : ""} onClick={() => set(x => {
             x.dhcp = false;
-            if (!x.ports[0].addr && lease && !lease.apipa) { x.ports[0].addr = ld.ports[0].addr; x.gw = ld.gw; }
+            if (!x.ports[0].addr && lease && !lease.apipa) { x.ports[0].addr = ld.ports[0].addr; x.gw = ld.gw; x.dns = ld.dns || ""; }
           })}>Static IP</button>
           <button role="radio" aria-checked={!!d.dhcp} className={d.dhcp ? "on" : ""} onClick={() => set(x => { x.dhcp = true; })}>DHCP</button>
         </div>
@@ -498,12 +574,15 @@ function Inspector({ d, topo, live, edit, onDhcp }) {
             onChange={v => set(x => { x.ports[0].addr = v; })} check={d.ports[0].addr ? parseAddr(d.ports[0].addr) : null}/>
           <Field label="Default gateway" value={d.gw} placeholder="192.168.1.1"
             onChange={v => set(x => { x.gw = v; })} check={d.gw && parseIp(d.gw) === null ? { error:"Not a valid IP" } : null}/>
+          <Field label="DNS server" value={d.dns || ""} placeholder="10.0.3.53"
+            onChange={v => set(x => { x.dns = v; })} check={d.dns && parseIp(d.dns) === null ? { error:"Not a valid IP" } : null}/>
         </>}
         {d.dhcp && <>
           {lease && !lease.apipa && (
             <dl className="tb-facts tb-lease">
               <dt>Leased IP</dt><dd>{ld.ports[0].addr}</dd>
               <dt>Gateway</dt><dd>{ld.gw}</dd>
+              <dt>DNS server</dt><dd>{ld.dns || "none (set it in the pool)"}</dd>
               <dt>DHCP server</dt><dd>{lease.serverName}</dd>
               <dt>Lease time</dt><dd>24 hours</dd>
             </dl>
@@ -517,6 +596,39 @@ function Inspector({ d, topo, live, edit, onDhcp }) {
           <dt>MAC</dt><dd>{macOf(d, 0)}</dd>
           <dt>eth0</dt><dd>{peerText(topo, d, 0)}</dd>
         </dl>
+
+        <div className="tb-subtitle">Services</div>
+        <label className="tb-check">
+          <input type="checkbox" checked={!!svc.web}
+            onChange={e => setSvc(s => { if (e.target.checked) s.web = { title:"My website" }; else delete s.web; })}/>
+          <b>Web server</b><span>TCP port 80</span>
+        </label>
+        {svc.web && (
+          <div className="tb-svc">
+            <Field label="Page title" value={svc.web.title || ""} placeholder="My website"
+              onChange={v => setSvc(s => { s.web.title = v; })}/>
+          </div>
+        )}
+        <label className="tb-check">
+          <input type="checkbox" checked={!!svc.dns}
+            onChange={e => setSvc(s => { if (e.target.checked) s.dns = { records:[{ name:"www.example.com", ip:"" }] }; else delete s.dns; })}/>
+          <b>DNS server</b><span>UDP port 53</span>
+        </label>
+        {svc.dns && (
+          <div className="tb-svc">
+            {(svc.dns.records || []).map((r, i) => (
+              <div key={i} className="tb-route">
+                <input value={r.name} placeholder="www.example.com" onChange={e => setSvc(s => { s.dns.records[i].name = e.target.value; })}/>
+                <span>→</span>
+                <input className={r.ip && parseIp(r.ip) === null ? "tb-bad" : ""} value={r.ip} placeholder="10.0.3.80"
+                  onChange={e => setSvc(s => { s.dns.records[i].ip = e.target.value; })}/>
+                <button onClick={() => setSvc(s => { s.dns.records.splice(i, 1); })} title="Remove record">✕</button>
+              </div>
+            ))}
+            <button className="tb-add" onClick={() => setSvc(s => { s.dns.records.push({ name:"", ip:"" }); })}>+ Add DNS record</button>
+          </div>
+        )}
+        {!svc.web && !svc.dns && <p className="tb-note">Turn on a service to make this PC a server.</p>}
       </>}
 
       {d.type === "switch" && <>
@@ -606,6 +718,13 @@ function Inspector({ d, topo, live, edit, onDhcp }) {
                   <input className={pool?.error ? "tb-bad" : ""} value={cfg.end} onChange={e => setPool({ ...cfg, end:e.target.value })}/>
                 </div>
               )}
+              {cfg && (
+                <div className="tb-pool-range">
+                  <span>DNS</span>
+                  <input className={cfg.dns && parseIp(cfg.dns) === null ? "tb-bad" : ""} value={cfg.dns || ""} placeholder="DNS server handed to clients"
+                    onChange={e => setPool({ ...cfg, dns:e.target.value })}/>
+                </div>
+              )}
               {pool?.error && <span className="tb-err">{pool.error}</span>}
               {pool && !pool.error && <span className="tb-pool-info">{pool.size} address{pool.size === 1 ? "" : "es"} · clients get gateway {numToIp(f.a.ip)}</span>}
             </div>
@@ -659,18 +778,18 @@ function PingLog({ pings, onReplay, onClear }) {
                 <td className="mono">{p.time}</td>
                 <td>{p.from}</td>
                 <td>{p.to}</td>
-                <td className={p.fwdOk ? "ok" : "bad"}>{p.dhcp ? (p.fwdOk ? "✓ leased" : "✗ no offer") : p.fwdOk ? "✓ arrived" : "✗ dropped"}</td>
+                <td className={p.fwdOk ? "ok" : "bad"}>{p.web ? (p.fwdOk ? "✓ loaded" : "✗ failed") : p.dhcp ? (p.fwdOk ? "✓ leased" : "✗ no offer") : p.fwdOk ? "✓ arrived" : "✗ dropped"}</td>
                 <td className={p.revOk === null ? "" : p.revOk ? "ok" : "bad"}>{p.revOk === null ? "—" : p.revOk ? "✓ arrived" : "✗ dropped"}</td>
                 <td>{p.fwdOk && p.routers !== null ? p.routers : "—"}</td>
                 <td>{p.ttl ?? "—"}</td>
-                <td className={p.fwdOk && (p.dhcp || !p.reason) ? "" : "bad"}>{p.reason || (p.revOk ? "Delivered both ways" : "Delivered")}</td>
+                <td className={p.fwdOk && (p.dhcp || p.web || !p.reason) ? "" : "bad"}>{p.reason || (p.revOk ? "Delivered both ways" : "Delivered")}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
       <div className="tb-panelbar">
-        <span>Click a row to send that ping again.</span>
+        <span>Click a row to run it again.</span>
         <button onClick={onClear}>Clear log</button>
       </div>
     </>
@@ -683,7 +802,7 @@ function HopTable({ topo, run, view, si, onPick }) {
   return (
     <>
       <p className="tb-note">
-        {view === "fwd" ? "Request" : "Reply"} · {run.ok ? "delivered" : "dropped"} · {run.steps.length} steps.
+        {run.stages ? "Web request" : view === "fwd" ? "Request" : "Reply"} · {run.ok ? "delivered" : "dropped"} · {run.steps.length} steps.
         Highlighted cells changed since the previous frame — MAC addresses change at every router, IP addresses never do.
       </p>
       <div className="tb-tablewrap">
@@ -699,7 +818,7 @@ function HopTable({ topo, run, view, si, onPick }) {
                 <tr key={i} className={`tb-click${i === si ? " cur" : ""} k-${s.kind}`} onClick={() => onPick(i)}>
                   <td>{i + 1}</td>
                   <td>{deviceById(topo, s.at)?.name ?? "—"}</td>
-                  <td className="what">{KIND_ICON[s.kind]} {s.title}</td>
+                  <td className="what">{KIND_ICON[s.kind]} {s.stage && <em className={`tb-stagetag st-${s.stage}`}>{s.stage}</em>}{s.title}</td>
                   <td className={`mono${chg("srcMac")}`}>{f?.srcMac ?? ""}</td>
                   <td className={`mono${chg("dstMac")}`}>{f?.dstMac ?? ""}</td>
                   <td className={`mono${chg("srcIp")}`}>{f?.srcIp ?? ""}</td>
@@ -757,7 +876,7 @@ function DeviceTables({ topo, tables, leases, onPick, onClear }) {
       <div className="tb-devgrid">
         {devs.map(d => (
           <div key={d.id} className="tb-devcard">
-            <button className="tb-devcard-title" style={{ color:TYPE_COLOR[d.type] }} onClick={() => onPick(d.id)}>
+            <button className="tb-devcard-title" style={{ color:colorOf(d) }} onClick={() => onPick(d.id)}>
               {d.type === "pc" ? "🖥" : d.type === "switch" ? "🔀" : "🧭"} {d.name}
             </button>
 
@@ -805,6 +924,15 @@ function DeviceTables({ topo, tables, leases, onPick, onClear }) {
               <div className="tb-subtitle">ARP cache</div>
               <MiniTable cols={["IP", "MAC", "Ping"]} empty={EMPTY}
                 rows={arpTableOf(tables, d.id).map(e => ({ c:[e.ip, e.mac, `#${e.ping}`], cls:fresh(e) }))}/>
+              {d.services?.web && <>
+                <div className="tb-subtitle">Web server</div>
+                <p className="tb-mini-empty">Listening on TCP port 80 · page “{d.services.web.title || "Welcome"}”</p>
+              </>}
+              {d.services?.dns && <>
+                <div className="tb-subtitle">DNS records</div>
+                <MiniTable cols={["Name", "Type", "Address"]} empty="No records"
+                  rows={(d.services.dns.records || []).map(r => ({ c:[r.name || "?", "A", r.ip || "?"] }))}/>
+              </>}
             </>}
           </div>
         ))}

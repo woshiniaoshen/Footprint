@@ -270,7 +270,7 @@ const apipaFor = pc => ({ ip: ipToNum(`169.254.${1 + Math.floor(pc.num / 250) % 
 // Hand out leases. DHCP clients never see each other's leases as "static", so order is by PC number.
 export function dhcpLeases(topo) {
   const base = structuredClone(topo);
-  for (const d of base.devices) if (d.type === "pc" && d.dhcp) { d.ports[0].addr = ""; d.gw = ""; }
+  for (const d of base.devices) if (d.type === "pc" && d.dhcp) { d.ports[0].addr = ""; d.gw = ""; d.dns = ""; }
   const used = new Set(base.devices.flatMap(d => deviceIps(d)));
   const leases = {};
   const clients = base.devices.filter(d => d.type === "pc" && d.dhcp).sort((a, b) => a.num - b.num);
@@ -294,7 +294,8 @@ export function dhcpLeases(topo) {
     if (ip === null) { fallback(`${dev.name} ${f.name}'s pool is full — ${pool.size === 1 ? "its only address is" : `all ${pool.size} addresses are`} in use`); continue; }
     used.add(ip);
     leases[pc.id] = { ip, prefix:f.a.prefix, gw:f.a.ip, server:dev.id, serverName:`${dev.name} ${f.name}`,
-      iface:f.name, endpoint:e, pool, offers:offers.length };
+      iface:f.name, endpoint:e, pool, offers:offers.length,
+      dns: parseIp(cfg.dns) !== null ? String(cfg.dns).trim() : "" };
   }
   return leases;
 }
@@ -308,6 +309,7 @@ export function applyDhcp(topo) {
     if (!l) continue;
     d.ports[0].addr = `${numToIp(l.ip)}/${l.prefix}`;
     d.gw = l.apipa ? "" : numToIp(l.gw);
+    d.dns = l.apipa ? "" : l.dns;
     d.lease = l;
   }
   return { topo:live, leases };
@@ -369,7 +371,7 @@ export function dhcpTrace(topo, leases, pcId) {
   const offer = { srcMac:srvMac, dstMac:mac, srcIp:gw, dstIp:"255.255.255.255", ttl:64 };
   const offerAt = steps.length;
   toClient(offer, "DHCP OFFER");
-  steps[offerAt].detail = `Offers ${offered}/${lease.prefix} with gateway ${gw} and a 24-hour lease.`;
+  steps[offerAt].detail = `Offers ${offered}/${lease.prefix} with gateway ${gw}${lease.dns ? `, DNS server ${lease.dns}` : " (no DNS server set in this pool)"} and a 24-hour lease.`;
   steps.at(-1).detail = `${pc.name} sees the offer of ${offered}. It still has no IP — it must formally request it.`;
   const request = { ...discover };
   steps.push({ kind:"send", at:pcId, links:[], frame:{ ...request, tag:null, app:"DHCP REQUEST" }, title:`${pc.name} broadcasts DHCP REQUEST for ${offered}`,
@@ -381,7 +383,7 @@ export function dhcpTrace(topo, leases, pcId) {
   toClient({ ...offer }, "DHCP ACK");
   steps[ackAt].detail = `Confirms ${offered}/${lease.prefix}, gateway ${gw}, lease time 24 hours.`;
   steps.at(-1).detail = `${pc.name} applies the lease.`;
-  steps.push({ kind:"deliver", at:pcId, links:[], title:`${pc.name} is configured: ${offered}/${lease.prefix}, gateway ${gw}`,
+  steps.push({ kind:"deliver", at:pcId, links:[], title:`${pc.name} is configured: ${offered}/${lease.prefix}, gateway ${gw}${lease.dns ? `, DNS ${lease.dns}` : ""}`,
     detail:`Lease from ${srv.name} ${srvIface}, valid 24 hours. ${pc.name} can now ARP for its gateway and send traffic.` });
   return { ok:true, steps, learned };
 }
@@ -412,7 +414,8 @@ const tagText = t => (t === null ? "untagged" : `802.1Q tag ${t}`);
 
 // ── Packet trace ──────────────────────────────────────────────────────────────
 // Walks an IPv4 packet from srcId to dstIp one event at a time.
-export function trace(topo, srcId, dstIpStr) {
+// opts: { l4, app, label } annotate the frames; arpCache (Set of "dev|ip") skips ARP for known next hops
+export function trace(topo, srcId, dstIpStr, opts = {}) {
   const steps = [];
   // What devices learn along the way: ARP entries, and switch MAC table entries
   const learned = { arp:[], mac:[] };
@@ -470,8 +473,14 @@ export function trace(topo, srcId, dstIpStr) {
     if (seg.unplugged) return fail(cur.id, `${cur.name} ${portName(cur.type, egress.port)} has no cable`, "The egress port is not connected to anything.");
     const target = seg.endpoints.find(e => ifaceAt(deviceById(topo, e.dev), e.port, e.tag)?.a.ip === nh);
     const srcMac = macOf(cur, egress.port);
-    // The ARP request floods the whole VLAN, so every switch it enters learns the sender's MAC
-    for (const e of seg.entered) learned.mac.push({ sw:e.sw, vlan:e.vlan, mac:srcMac, port:e.port, host:`${cur.name} ${egress.name}` });
+    const cached = !!target && !!opts.arpCache?.has(`${cur.id}|${numToIp(nh)}`);
+    if (cached) {
+      // No broadcast needed: only the switches on the path see (and learn from) the unicast frame
+      for (const h of target.hops) learned.mac.push({ sw:h.sw, vlan:h.vlan, mac:srcMac, port:h.inPort, host:`${cur.name} ${egress.name}` });
+    } else {
+      // The ARP request floods the whole VLAN, so every switch it enters learns the sender's MAC
+      for (const e of seg.entered) learned.mac.push({ sw:e.sw, vlan:e.vlan, mac:srcMac, port:e.port, host:`${cur.name} ${egress.name}` });
+    }
     if (!target) {
       let why = `${cur.name} broadcast "who has ${numToIp(nh)}?" out ${egress.name}, but nothing it reached has that IP.`;
       if (seg.drops.length) why += ` On the way: ${seg.drops.map(x => x.why).join("; ")}.`;
@@ -493,13 +502,17 @@ export function trace(topo, srcId, dstIpStr) {
     if (egressIp !== undefined) learned.arp.push({ dev:tdev.id, ip:numToIp(egressIp), mac:srcMac, iface:tIface.name, host:`${cur.name} ${egress.name}` });
     // The unicast ARP reply teaches the switches on the path where the target lives
     for (const h of target.hops) learned.mac.push({ sw:h.sw, vlan:h.vlan, mac:dstMac, port:h.outPort, host:`${tdev.name} ${tIface.name}` });
-    steps.push({ kind:"arp", at:cur.id, links:target.links, title:`ARP: ${numToIp(nh)} is at ${dstMac}`,
-      detail:`${cur.name} broadcasts "who has ${numToIp(nh)}?"${target.hops.length ? ` in VLAN ${target.hops[0].vlan}` : ""}; ${tdev.name} ${tIface.name} replies with its MAC.` });
+    if (!cached) {
+      steps.push({ kind:"arp", at:cur.id, links:target.links, title:`ARP: ${numToIp(nh)} is at ${dstMac}`,
+        detail:`${cur.name} broadcasts "who has ${numToIp(nh)}?"${target.hops.length ? ` in VLAN ${target.hops[0].vlan}` : ""}; ${tdev.name} ${tIface.name} replies with its MAC.` });
+    }
 
     // 3. Frame crosses the segment, switch by switch
-    const base = { srcMac, dstMac, srcIp:numToIp(srcAddr.ip), dstIp:numToIp(dst), ttl };
-    steps.push({ kind:"send", at:cur.id, links:[], frame:{ ...base, tag:egress.tag }, title:`${cur.name} sends frame out ${egress.name}`,
-      detail:`New Ethernet header: ${srcMac} → ${dstMac}, ${tagText(egress.tag)}. IP addresses stay ${base.srcIp} → ${base.dstIp}.` });
+    const base = { srcMac, dstMac, srcIp:numToIp(srcAddr.ip), dstIp:numToIp(dst), ttl,
+      ...(opts.l4 ? { l4:opts.l4 } : {}), ...(opts.app ? { app:opts.app } : {}) };
+    steps.push({ kind:"send", at:cur.id, links:[], frame:{ ...base, tag:egress.tag },
+      title:`${cur.name} sends ${opts.label ? `${opts.label} ` : "frame "}out ${egress.name}`,
+      detail:`${cached ? `${numToIp(nh)}'s MAC is already in ${cur.name}'s ARP cache, so no ARP needed. ` : ""}New Ethernet header: ${srcMac} → ${dstMac}, ${tagText(egress.tag)}. IP addresses stay ${base.srcIp} → ${base.dstIp}.` });
     target.hops.forEach((h, i) => {
       const sw = deviceById(topo, h.sw);
       const inDesc  = h.inMode === "access" ? `access port, VLAN ${h.vlan}` : `trunk, ${tagText(h.tagIn)}`;
@@ -514,7 +527,7 @@ export function trace(topo, srcId, dstIpStr) {
 
     // 4. Delivered, or forward again
     if (deviceIps(tdev).includes(dst)) {
-      steps.push({ kind:"deliver", at:tdev.id, links:[], title:`Delivered to ${tdev.name}`,
+      steps.push({ kind:"deliver", at:tdev.id, links:[], title:opts.label ? `${opts.label} reaches ${tdev.name}` : `Delivered to ${tdev.name}`,
         detail:`${numToIp(dst)} belongs to ${tdev.name}. The packet crossed ${steps.filter(s => s.kind === "route" && deviceById(topo, s.at)?.type === "router").length} router(s); final TTL ${ttl}.` });
       return { ok:true, steps, learned, ttl };
     }
@@ -522,6 +535,131 @@ export function trace(topo, srcId, dstIpStr) {
     cur = tdev;
   }
   return fail(cur.id, "Gave up after too many hops", "This looks like a routing loop.");
+}
+
+// ── Servers and "a day in the life of a web request" ──────────────────────────
+export const isServer = d => d?.type === "pc" && !!(d.services?.dns || d.services?.web);
+const normName = s => String(s ?? "").trim().toLowerCase().replace(/\.$/, "");
+
+export function dnsLookup(server, name) {
+  const rec = (server?.services?.dns?.records || []).find(r => normName(r.name) === normName(name));
+  return rec ? parseIp(rec.ip) : null;
+}
+
+export function parseUrl(s) {
+  const t = String(s ?? "").trim().replace(/^https?:\/\//i, "");
+  const slash = t.indexOf("/");
+  const host = (slash < 0 ? t : t.slice(0, slash)).replace(/:\d+$/, "").toLowerCase();
+  if (!host || /\s/.test(host)) return null;
+  return { host, path: slash < 0 ? "/" : t.slice(slash) };
+}
+
+// Opens a URL from a PC: DHCP → (ARP) → DNS → TCP handshake → HTTP, as in Kurose & Ross §6.7.
+// `base` is the configured topology (for DHCP); `live` has leases applied.
+export function webRequest(base, live, leases, pcId, urlStr) {
+  const steps = [], stages = [];
+  const learned = { arp:[], mac:[] };
+  const arpCache = new Set();
+  const absorb = (run, stage) => {
+    run.steps.forEach(s => steps.push({ ...s, stage }));
+    learned.arp.push(...run.learned.arp);
+    learned.mac.push(...run.learned.mac);
+    run.learned.arp.forEach(e => arpCache.add(`${e.dev}|${e.ip}`));
+    return run.ok;
+  };
+  const note = (stage, at, title, detail = "", kind = "route") => steps.push({ kind, at, links:[], title, detail, stage });
+  const finish = (ok, reason, failed) => {
+    if (failed) stages.push({ name:failed, ok:false });
+    return { ok, steps, learned, stages, reason };
+  };
+
+  const pc = deviceById(live, pcId);
+  const url = parseUrl(urlStr);
+  if (!pc || pc.type !== "pc") return finish(false, "Pick a source PC");
+  if (!url) { note("DNS", pcId, "Enter a web address such as www.cs204.edu", "", "drop"); return finish(false, "Invalid URL", "DNS"); }
+
+  // 1. DHCP
+  if (pc.dhcp) {
+    if (!absorb(dhcpTrace(base, leases, pcId), "DHCP")) return finish(false, "No DHCP lease", "DHCP");
+  } else {
+    note("DHCP", pcId, `${pc.name} has a static IP — no DHCP needed`,
+      `Configured by hand: ${pc.ports[0].addr || "no IP"}, gateway ${pc.gw || "none"}, DNS server ${pc.dns || "none"}.`);
+  }
+  stages.push({ name:"DHCP", ok:true });
+  const mine = portAddr(pc, 0);
+  if (!mine) { note("DHCP", pcId, `${pc.name} has no IP address`, "", "drop"); return finish(false, "No IP address", "DNS"); }
+  const myIp = numToIp(mine.ip);
+
+  // 2. DNS (UDP port 53)
+  let serverIp = parseIp(url.host);
+  if (serverIp !== null) {
+    note("DNS", pcId, `${url.host} is already an IP address — no DNS lookup needed`);
+  } else {
+    const dnsIp = parseIp(pc.dns);
+    if (dnsIp === null) {
+      note("DNS", pcId, `${pc.name} doesn't know a DNS server`,
+        `To turn ${url.host} into an IP address the PC must ask a DNS server. Set one in the DHCP pool (or the PC's static settings).`, "drop");
+      return finish(false, "No DNS server configured", "DNS");
+    }
+    const sport = 50000 + pc.num;
+    if (!absorb(trace(live, pcId, numToIp(dnsIp), { l4:`UDP ${sport} → 53`, app:`DNS query: A record for ${url.host}?`, label:"DNS query", arpCache }), "DNS"))
+      return finish(false, "DNS query didn't reach the server", "DNS");
+    const dnsDev = live.devices.find(d => deviceIps(d).includes(dnsIp));
+    if (!dnsDev?.services?.dns) {
+      note("DNS", dnsDev.id, `${dnsDev.name} isn't running a DNS server`,
+        `Nothing listens on UDP port 53 at ${numToIp(dnsIp)}, so the query goes unanswered (a real host would send ICMP "port unreachable").`, "drop");
+      return finish(false, "No DNS service at that address", "DNS");
+    }
+    serverIp = dnsLookup(dnsDev, url.host);
+    note("DNS", dnsDev.id,
+      serverIp === null ? `${dnsDev.name} has no record for ${url.host}` : `${dnsDev.name} looks up ${url.host} → ${numToIp(serverIp)}`,
+      serverIp === null ? "The name isn't in this server's records, so it answers NXDOMAIN (non-existent domain)." : "It finds an A record and sends the answer back over UDP.");
+    if (dnsDev.type !== "pc" || !absorb(trace(live, dnsDev.id, myIp, {
+      l4:`UDP 53 → ${sport}`, label:"DNS response", arpCache,
+      app: serverIp === null ? `DNS response: NXDOMAIN (${url.host})` : `DNS response: ${url.host} A ${numToIp(serverIp)}`,
+    }), "DNS")) return finish(false, "DNS response didn't make it back", "DNS");
+    if (serverIp === null) {
+      note("DNS", pcId, `Name not found: ${url.host}`, "The browser shows “server not found”. No TCP connection is attempted.", "drop");
+      return finish(false, `NXDOMAIN for ${url.host}`, "DNS");
+    }
+  }
+  stages.push({ name:"DNS", ok:true });
+
+  // 3. TCP three-way handshake to port 80
+  const srv = numToIp(serverIp);
+  const cport = 49152 + pc.num, cIsn = 1000 + pc.num * 100, sIsn = 5000;
+  if (!absorb(trace(live, pcId, srv, { l4:`TCP ${cport} → 80 [SYN] seq=${cIsn}`, label:"TCP SYN", arpCache }), "TCP"))
+    return finish(false, "TCP SYN didn't reach the server", "TCP");
+  const web = live.devices.find(d => deviceIps(d).includes(serverIp));
+  if (!web?.services?.web) {
+    note("TCP", web.id, `${web.name} has no web server on port 80`,
+      "Nothing is listening on TCP port 80, so the host refuses the connection with a RST segment.", "drop");
+    if (web.type === "pc") absorb(trace(live, web.id, myIp, { l4:`TCP 80 → ${cport} [RST, ACK] seq=0 ack=${cIsn + 1}`, label:"TCP RST", arpCache }), "TCP");
+    note("TCP", pcId, "Connection refused", "The browser reports that the site refused to connect.", "drop");
+    return finish(false, "Connection refused — no web server on port 80", "TCP");
+  }
+  if (!absorb(trace(live, web.id, myIp, { l4:`TCP 80 → ${cport} [SYN, ACK] seq=${sIsn} ack=${cIsn + 1}`, label:"TCP SYN-ACK", arpCache }), "TCP"))
+    return finish(false, "TCP SYN-ACK didn't make it back", "TCP");
+  if (!absorb(trace(live, pcId, srv, { l4:`TCP ${cport} → 80 [ACK] seq=${cIsn + 1} ack=${sIsn + 1}`, label:"TCP ACK", arpCache }), "TCP"))
+    return finish(false, "TCP ACK didn't reach the server", "TCP");
+  note("TCP", pcId, "TCP connection established",
+    `Three-way handshake done: client port ${cport} ↔ server port 80, starting sequence numbers ${cIsn} (client) and ${sIsn} (server).`, "deliver");
+  stages.push({ name:"TCP", ok:true });
+
+  // 4. HTTP request and response
+  const get = `GET ${url.path} HTTP/1.1 · Host: ${url.host}`;
+  const getLen = get.length + 60;
+  if (!absorb(trace(live, pcId, srv, { l4:`TCP ${cport} → 80 [PSH, ACK] seq=${cIsn + 1} ack=${sIsn + 1} len=${getLen}`, app:`HTTP ${get}`, label:"HTTP GET", arpCache }), "HTTP"))
+    return finish(false, "HTTP request didn't reach the server", "HTTP");
+  const title = String(web.services.web.title || "").trim() || "Welcome";
+  if (!absorb(trace(live, web.id, myIp, {
+    l4:`TCP 80 → ${cport} [PSH, ACK] seq=${sIsn + 1} ack=${cIsn + 1 + getLen} len=512`,
+    app:`HTTP/1.1 200 OK · <title>${title}</title>`, label:"HTTP 200 OK", arpCache,
+  }), "HTTP")) return finish(false, "HTTP response didn't make it back", "HTTP");
+  note("HTTP", pcId, `Page loaded: “${title}”`,
+    `${pc.name}'s browser renders the page from ${web.name} (${srv}). DHCP, ARP, DNS, TCP and HTTP all had to work for this to happen.`, "deliver");
+  stages.push({ name:"HTTP", ok:true });
+  return { ok:true, steps, learned, stages, title, serverIp:srv };
 }
 
 // ── Learned state (ARP caches, switch MAC tables) ─────────────────────────────
@@ -595,8 +733,17 @@ export function problems(topo) {
     }
     if (d.type === "router") {
       interfaces(d).forEach(f => {
-        const pool = parsePool(poolConfig(d, f), f);
+        const cfg = poolConfig(d, f);
+        const pool = parsePool(cfg, f);
         if (pool?.error) add("error", d.id, `${d.name} ${f.name} DHCP pool: ${pool.error}`);
+        if (cfg?.dns && parseIp(cfg.dns) === null) add("error", d.id, `${d.name} ${f.name} DHCP pool: DNS server "${cfg.dns}" is not an IP`);
+      });
+    }
+    if (d.type === "pc" && !d.dhcp && d.dns && parseIp(d.dns) === null) add("error", d.id, `${d.name}: DNS server "${d.dns}" is not an IP`);
+    if (d.type === "pc" && d.services?.dns) {
+      (d.services.dns.records || []).forEach(r => {
+        if (!normName(r.name)) add("error", d.id, `${d.name} DNS: a record has no name`);
+        else if (parseIp(r.ip) === null) add("error", d.id, `${d.name} DNS: ${r.name} points to "${r.ip}", which is not an IP`);
       });
     }
     if (d.type === "pc") {
@@ -666,10 +813,13 @@ function build(spec) {
     if (cfg.gw) d.gw = cfg.gw;
     if (cfg.routes) d.routes = cfg.routes.map(([dest, via]) => ({ dest, via }));
     if (cfg.dhcp) d.dhcp = true;
+    if (cfg.dns) d.dns = cfg.dns;
+    if (cfg.services) d.services = cfg.services;
+    const poolOf = ([start, end, dns]) => ({ start, end, ...(dns ? { dns } : {}) });
     Object.entries(cfg.subs || {}).forEach(([i, subs]) => {
-      d.ports[i].subs = subs.map(([vlan, addr, pool]) => ({ vlan:String(vlan), addr, ...(pool ? { dhcp:{ start:pool[0], end:pool[1] } } : {}) }));
+      d.ports[i].subs = subs.map(([vlan, addr, pool]) => ({ vlan:String(vlan), addr, ...(pool ? { dhcp:poolOf(pool) } : {}) }));
     });
-    Object.entries(cfg.pools || {}).forEach(([i, [start, end]]) => { d.ports[i].dhcp = { start, end }; });
+    Object.entries(cfg.pools || {}).forEach(([i, pool]) => { d.ports[i].dhcp = poolOf(pool); });
     Object.entries(cfg.sw || {}).forEach(([i, p]) => { Object.assign(d.ports[i], p); });
     topo.devices.push(d);
   }
@@ -726,7 +876,29 @@ const DHCP_CAMPUS = vlan20Pool => {
   return spec;
 };
 
+const DAY_IN_LIFE = webRecordIp => ({
+  devices: [
+    ["pc", 1, 90, 230, { name:"Laptop", dhcp:true }],
+    ["switch", 1, 230, 230],
+    ["router", 1, 390, 230, { name:"Campus", addrs:["192.168.1.1/24", "10.0.12.1/30"], routes:[["0.0.0.0/0", "10.0.12.2"]],
+      pools:{ 0:["192.168.1.100", "192.168.1.199", "10.0.3.53"] } }],
+    ["router", 2, 590, 230, { name:"ISP", addrs:["10.0.12.2/30", "10.0.3.1/24"], routes:[["192.168.1.0/24", "10.0.12.1"]] }],
+    ["switch", 2, 760, 230],
+    ["pc", 2, 910, 120, { name:"DNS", addrs:["10.0.3.53/24"], gw:"10.0.3.1",
+      services:{ dns:{ records:[{ name:"www.cs204.edu", ip:webRecordIp }, { name:"cs204.edu", ip:webRecordIp }] } } }],
+    ["pc", 3, 910, 340, { name:"Web", addrs:["10.0.3.80/24"], gw:"10.0.3.1", services:{ web:{ title:"CS204: Computer Networks" } } }],
+  ],
+  links: [
+    ["pc1", 0, "switch1", 0], ["switch1", 7, "router1", 0], ["router1", 1, "router2", 0],
+    ["router2", 1, "switch2", 7], ["switch2", 0, "pc2", 0], ["switch2", 1, "pc3", 0],
+  ],
+});
+
 export const PRESETS = [
+  { id:"dayinlife", name:"A day in the life of a web request", hint:"Open www.cs204.edu from the Laptop: DHCP → ARP → DNS → TCP handshake → HTTP, as in the lecture's synthesis slides.",
+    build: () => build(DAY_IN_LIFE("10.0.3.80")) },
+  { id:"webpuzzle", name:"Puzzle: the page won't load", hint:"The Laptop gets an address and DNS answers, but www.cs204.edu still won't load. Follow the trace to find out why.",
+    build: () => build(DAY_IN_LIFE("10.0.3.81")) },
   { id:"classic", name:"Two LANs, one router", hint:"The guided walkthrough's network",
     build: () => build({
       devices: [
