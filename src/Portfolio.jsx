@@ -37,11 +37,27 @@ const projects = [
   },
 ];
 
-const experience = [
-  { org: "Nokia Solutions and Networks", detail: "Internship", kind: "Industry" },
-  { org: "Singapore Management University", detail: "BSc Computer Science, Cybersecurity track", kind: "Education", status: "In progress" },
-  { org: "Nanyang Polytechnic", detail: "Diploma in Infocomm & Media Engineering, Cloud and Infrastructure Services", kind: "Education" },
-  { org: "Google Cybersecurity Certificate", detail: "Professional certificate", kind: "Certification", status: "In progress" },
+const background = [
+  {
+    heading: "Experience",
+    items: [
+      { period: "2022 – 2023", org: "Nokia Solutions and Networks", detail: "System Engineer Intern, Sep 2022 – Apr 2023" },
+    ],
+  },
+  {
+    heading: "Education",
+    items: [
+      { period: "2025 – 2029", org: "Singapore Management University", detail: "BSc Computer Science, Cybersecurity track", status: "In progress" },
+      { period: "2020 – 2023", org: "Nanyang Polytechnic", detail: "Diploma with Merit in Infocomm & Media Engineering, Cloud and Infrastructure Services" },
+    ],
+  },
+  {
+    heading: "Certifications",
+    items: [
+      { period: "In progress", org: "Google Cybersecurity Certificate", detail: "Coursera" },
+      { period: "Dec 2022", org: "Google IT Support Specialization", detail: "Coursera · 5 courses, including IT Security and Computer Networking", href: "https://www.coursera.org/account/accomplishments/specialization/certificate/SK3WM4BMRK5Y" },
+    ],
+  },
 ];
 
 const skills = [
@@ -79,8 +95,8 @@ export default function Portfolio() {
           <h1>Nelson Tan</h1>
           <p className="lead">
             I study Computer Science at Singapore Management University on the cybersecurity track.
-            I build tools for understanding networks and the security problems in them, and I have
-            interned at Nokia Solutions and Networks.
+            I build tools for understanding networks and the security problems in them. Before university
+            I interned as a system engineer at Nokia Solutions and Networks.
           </p>
           <div className="actions">
             <a className="button button-primary" href="#projects">View projects</a>
@@ -140,17 +156,28 @@ export default function Portfolio() {
         <section className="section" id="experience">
           <div className="container two-col">
             <h2 className="section-title">Experience &amp; education</h2>
-            <ol className="timeline">
-              {experience.map(e => (
-                <li key={e.org}>
-                  <span className="meta">{e.kind}</span>
-                  <div>
-                    <strong>{e.org}</strong>
-                    <p>{e.detail}{e.status && <span className="status">{e.status}</span>}</p>
-                  </div>
-                </li>
+            <div className="background">
+              {background.map(group => (
+                <div key={group.heading}>
+                  <h3 className="group-title">{group.heading}</h3>
+                  <ol className="timeline">
+                    {group.items.map(e => (
+                      <li key={e.org}>
+                        <span className="meta">{e.period}</span>
+                        <div>
+                          <strong>{e.org}</strong>
+                          <p>
+                            {e.detail}
+                            {e.status && <span className="status">{e.status}</span>}
+                            {e.href && <> · <a className="inline-link" href={e.href} target="_blank" rel="noreferrer">Verify</a></>}
+                          </p>
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
               ))}
-            </ol>
+            </div>
           </div>
         </section>
 
