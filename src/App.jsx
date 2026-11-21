@@ -1327,6 +1327,10 @@ function AuthScreen({ onAuth }) {
   const [loading, setLoading] = useState(false);
   const [confirmSent, setConfirmSent] = useState(false);
   const [resetSent, setResetSent] = useState(false);
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  useEffect(() => { const onResize = () => setViewportWidth(window.innerWidth); window.addEventListener("resize", onResize); return () => window.removeEventListener("resize", onResize); }, []);
+  const isMobile = viewportWidth < 900;
+  const isPhone = viewportWidth < 640;
 
   const handleSubmit = async () => {
     setError(""); setLoading(true);
@@ -1398,47 +1402,80 @@ function AuthScreen({ onAuth }) {
   );
 
   return (
-    <div style={authContainerStyle}>
+    <div style={{ ...authContainerStyle, padding: 0, alignItems: "stretch", flexDirection: isMobile ? "column" : "row" }}>
       <Fonts />
-      <div style={{ width: "min(1040px, calc(100vw - 32px))", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(330px, 100%), 1fr))", gap: 18, alignItems: "stretch", position: "relative", zIndex: 10 }}>
-      <div style={{ ...authCardStyle, width: "100%", maxWidth: "none", display: "flex", flexDirection: "column", justifyContent: "space-between", minHeight: 456, overflow: "hidden" }}>
-        <BrandLockup align="left" titleSize={38} />
-        <div>
-          <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 38, lineHeight: 1.03, margin: "28px 0 12px" }}>Turn your photos into a travel map</h2>
-          <p style={{ color: palette.muted, fontSize: 15, lineHeight: 1.7, margin: 0 }}>
-            Upload JPG, PNG, or HEIC photos, map the places they were taken, and browse your travel memories through pins, photos, and popular-place heatmaps.
+      <style>{`
+        @keyframes fpRise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+        @keyframes fpPulse { 0%, 100% { transform: scale(1); opacity: 0.55; } 50% { transform: scale(1.9); opacity: 0; } }
+        .fp-input:focus { border-color: ${palette.accent} !important; background: rgba(255,255,255,0.12) !important; }
+      `}</style>
+      <div style={{ flex: isMobile ? "0 0 auto" : 1, minWidth: 0, position: "relative", overflow: "hidden", display: "flex", flexDirection: "column", justifyContent: "center", padding: isPhone ? "44px 24px 28px" : isMobile ? "56px 48px 32px" : "clamp(24px, 6vh, 56px) clamp(32px, 6vw, 88px)", boxSizing: "border-box" }}>
+        <svg aria-hidden="true" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }} preserveAspectRatio="none" viewBox="0 0 100 100">
+          {[15, 30, 45, 60, 75, 90].map(v => <line key={`h${v}`} x1="0" y1={v} x2="100" y2={v} stroke="white" strokeOpacity="0.04" strokeWidth="0.15" />)}
+          {[15, 30, 45, 60, 75, 90].map(v => <line key={`v${v}`} x1={v} y1="0" x2={v} y2="100" stroke="white" strokeOpacity="0.04" strokeWidth="0.15" />)}
+          <path d="M64 93 C 74 84, 80 76, 84 60 S 88 28, 93 12" fill="none" stroke={palette.accent} strokeOpacity="0.35" strokeWidth="0.35" strokeDasharray="1.2 1.4" />
+        </svg>
+        {!isMobile && [
+          { left: "64%", top: "93%", color: palette.mint },
+          { left: "84%", top: "60%", color: palette.gold },
+          { left: "93%", top: "12%", color: palette.accent },
+        ].map((p, i) => (
+          <div key={i} aria-hidden="true" style={{ position: "absolute", left: p.left, top: p.top, width: 12, height: 12, marginLeft: -6, marginTop: -6, pointerEvents: "none" }}>
+            <div style={{ position: "absolute", inset: 0, borderRadius: "50%", background: p.color, animation: `fpPulse 2.6s ease-out ${i * 0.8}s infinite` }} />
+            <div style={{ position: "absolute", inset: 0, borderRadius: "50%", background: p.color, boxShadow: `0 0 16px ${p.color}` }} />
+          </div>
+        ))}
+        <div style={{ position: "relative", textAlign: "left", animation: "fpRise 0.6s ease both" }}>
+          <BrandLockup align="left" titleSize={isPhone ? 28 : 32} />
+          <h1 style={{ fontFamily: "'Playfair Display', serif", fontSize: isPhone ? 34 : "clamp(34px, min(4.6vw, 7vh), 60px)", lineHeight: 1.02, fontWeight: 700, letterSpacing: "-0.02em", margin: isPhone ? "24px 0 10px" : "clamp(18px, 5vh, 44px) 0 clamp(10px, 2vh, 18px)", maxWidth: 520 }}>
+            Every place<br />you've <span style={{ fontStyle: "italic", background: `linear-gradient(90deg, ${palette.accent}, ${palette.gold})`, WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>ever been.</span>
+          </h1>
+          <p style={{ color: palette.muted, fontSize: isPhone ? 14 : 16, lineHeight: 1.75, margin: 0, maxWidth: 420 }}>
+            Drop your photos in and Footprint pins each one where it was taken — building a living map of your travels, one memory at a time.
           </p>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10, marginTop: 28 }}>
-          {["Upload", "Locate", "Relive"].map((label, index) => (
-            <div key={label} style={{ padding: 14, borderRadius: 12, background: "rgba(255,255,255,0.065)", border: `1px solid ${palette.line}` }}>
-              <div style={{ color: [palette.mint, palette.gold, palette.sky][index], fontWeight: 800, fontSize: 20 }}>{index + 1}</div>
-              <div style={{ marginTop: 4, fontSize: 12, fontWeight: 700 }}>{label}</div>
+          {!isPhone && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "clamp(10px, 1.8vh, 14px)", marginTop: "clamp(18px, 4.5vh, 40px)" }}>
+              {[
+                { icon: "📸", color: palette.mint, title: "Auto-located photos", desc: "Reads GPS from JPG, HEIC and motion photos" },
+                { icon: "🗺️", color: palette.sky, title: "Your personal atlas", desc: "Every shot becomes a pin on the map" },
+                { icon: "✨", color: palette.gold, title: "Relive the moment", desc: "Tap a pin to open the memory and its timeline" },
+              ].map(f => (
+                <div key={f.title} style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                  <div style={{ width: 42, height: 42, borderRadius: 13, background: `${f.color}1F`, border: `1px solid ${f.color}55`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 19, flexShrink: 0 }}>{f.icon}</div>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>{f.title}</div>
+                    <div style={{ color: palette.muted, fontSize: 13, marginTop: 2 }}>{f.desc}</div>
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
+          )}
         </div>
       </div>
-      <div style={{ ...authCardStyle, alignSelf: "center" }}>
-        <div style={{ textAlign: "center", marginBottom: 32 }}>
-          <BrandLockup />
+      <div style={{ width: isMobile ? "100%" : "clamp(380px, 36vw, 480px)", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: isMobile ? "8px 20px 48px" : "48px 52px", background: isMobile ? "transparent" : "rgba(10,15,26,0.45)", borderLeft: isMobile ? "none" : `1px solid ${palette.line}`, backdropFilter: isMobile ? "none" : "blur(18px)", boxSizing: "border-box", position: "relative", zIndex: 10 }}>
+      <div style={{ width: "100%", maxWidth: 360, textAlign: "left", animation: "fpRise 0.6s ease 0.12s both", ...(isMobile ? { padding: "28px 22px", borderRadius: 22, background: "linear-gradient(180deg, rgba(255,255,255,0.1), rgba(255,255,255,0.05))", border: `1px solid ${palette.line}`, backdropFilter: "blur(14px)", boxShadow: "0 22px 60px rgba(0,0,0,0.3)", boxSizing: "border-box" } : {}) }}>
+        <div style={{ display: "flex", padding: 4, borderRadius: 14, background: "rgba(255,255,255,0.06)", border: `1px solid ${palette.line}`, marginBottom: 26 }}>
+          {[["Log In", true], ["Sign Up", false]].map(([label, mode]) => (
+            <button key={label} onClick={() => { setIsLogin(mode); setError(""); }} style={{ flex: 1, padding: "10px 0", borderRadius: 10, border: "none", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 700, transition: "all 0.2s ease", background: isLogin === mode ? palette.text : "transparent", color: isLogin === mode ? palette.ink : palette.muted }}>{label}</button>
+          ))}
         </div>
-        <h2 style={authTitleStyle}>{isLogin ? "Welcome back" : "Create account"}</h2>
+        <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 28, fontWeight: 700, margin: "0 0 6px" }}>{isLogin ? "Welcome back" : "Start your map"}</h2>
+        <p style={{ color: palette.muted, fontSize: 14, margin: "0 0 24px" }}>{isLogin ? "Sign in to pick up where you left off." : "Create a free account in seconds."}</p>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <input type="email" placeholder="Email address" value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSubmit()} style={inputStyle} />
-          <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSubmit()} style={inputStyle} />
+          <input className="fp-input" type="email" placeholder="Email address" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSubmit()} style={{ ...inputStyle, transition: "border-color 0.2s ease, background 0.2s ease" }} />
+          <input className="fp-input" type="password" placeholder="Password" autoComplete={isLogin ? "current-password" : "new-password"} value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSubmit()} style={{ ...inputStyle, transition: "border-color 0.2s ease, background 0.2s ease" }} />
         </div>
         {!isLogin && <div style={{ marginTop: 8, color: palette.muted, fontSize: 12, lineHeight: 1.4 }}>{PASSWORD_HELP}</div>}
         {error && <div style={{ background: "rgba(230,57,70,0.1)", border: "1px solid rgba(230,57,70,0.3)", color: "#E63946", padding: "10px 14px", borderRadius: 10, fontSize: 13, marginTop: 12 }}>{error}</div>}
-        <button onClick={handleSubmit} disabled={loading} style={{ ...authBtnStyle, marginTop: 16, opacity: loading ? 0.6 : 1 }}>
-          {loading ? "Please wait..." : isLogin ? "Log In" : "Sign Up"}
+        {isLogin && (
+          <div style={{ textAlign: "right", marginTop: 10 }}>
+            <button onClick={() => { setForgotMode(true); setError(""); }} style={{ background: "none", border: "none", color: palette.mint, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "'DM Sans', sans-serif", padding: 0 }}>Forgot password?</button>
+          </div>
+        )}
+        <button onClick={handleSubmit} disabled={loading} style={{ ...authBtnStyle, marginTop: 18, opacity: loading ? 0.6 : 1 }}>
+          {loading ? "Please wait..." : isLogin ? "Log In" : "Create Account"}
         </button>
-        <div style={{ textAlign: "center", marginTop: 20 }}>
-          <span style={{ opacity: 0.4, fontSize: 13 }}>{isLogin ? "Don't have an account? " : "Already have an account? "}</span>
-          <button onClick={() => { setIsLogin(!isLogin); setError(""); }} style={{ background: "none", border: "none", color: "#E63946", cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "'DM Sans', sans-serif", padding: 0 }}>
-            {isLogin ? "Sign Up" : "Log In"}
-          </button>
-        </div>
-        {isLogin && <button onClick={() => { setForgotMode(true); setError(""); }} style={{ width: "100%", marginTop: 14, background: "none", border: "none", color: palette.mint, cursor: "pointer", fontSize: 13, fontWeight: 700, fontFamily: "'DM Sans', sans-serif" }}>Forgot password?</button>}
+        <div style={{ textAlign: "center", marginTop: 22, fontSize: 12, color: palette.muted, opacity: 0.7 }}>v{APP_VERSION} · Your photos stay private to your account</div>
       </div>
       </div>
     </div>
