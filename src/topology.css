@@ -155,6 +155,34 @@
 .tb-steplist li.future { opacity: 0.45; }
 .tb-steplist li.k-drop { color: #e63946; }
 
+/* ── DHCP ── */
+.tb-apipa { fill: #f8a5ac; }
+.tb-seg { display: flex; background: rgba(0,0,0,0.3); border: 1px solid var(--line); border-radius: 8px; padding: 3px; margin-bottom: 10px; }
+.tb-seg button {
+  flex: 1; background: none; border: none; color: var(--muted); font-size: 12px; font-weight: 600;
+  padding: 6px; border-radius: 6px; cursor: pointer; font-family: inherit;
+}
+.tb-seg button.on { background: rgba(99,179,237,0.16); color: #63b3ed; }
+.tb-full { width: 100%; margin: 4px 0 10px; }
+.tb-lease { margin-bottom: 6px; }
+.tb-errbox {
+  font-size: 11px; line-height: 1.5; color: #f8a5ac; background: rgba(230,57,70,0.08);
+  border: 1px solid rgba(230,57,70,0.3); border-radius: 8px; padding: 8px 10px; margin-bottom: 6px;
+}
+.tb-pool { border-top: 1px solid var(--line); padding: 6px 0; display: flex; flex-direction: column; gap: 4px; }
+.tb-check { display: flex; align-items: center; gap: 6px; font-size: 11px; cursor: pointer; }
+.tb-check b { font-family: 'JetBrains Mono', monospace; color: #fb923c; }
+.tb-check span { color: var(--quiet); font-family: 'JetBrains Mono', monospace; font-size: 10.5px; }
+.tb-pool-range { display: flex; align-items: center; gap: 5px; margin-left: 20px; }
+.tb-pool-range input {
+  flex: 1; min-width: 0; background: rgba(0,0,0,0.3); border: 1px solid var(--line); color: var(--text);
+  border-radius: 6px; padding: 5px 6px; font-size: 11px; font-family: 'JetBrains Mono', monospace; outline: none;
+}
+.tb-pool-range input.tb-bad { border-color: rgba(230,57,70,0.6); }
+.tb-pool-range span { font-size: 10px; color: var(--quiet); }
+.tb-pool-info { font-size: 10px; color: var(--quiet); margin-left: 20px; }
+.tb-pool .tb-err { margin-left: 20px; }
+
 /* ── Ping log / hop table / device tables ── */
 .tb-left { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .tb-panel { padding: 0 0 10px; overflow: hidden; }

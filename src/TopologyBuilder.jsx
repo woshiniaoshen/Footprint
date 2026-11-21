@@ -5,6 +5,7 @@ import {
   trace, deviceIps, numToIp, interfaces, switchPort, parseAllowed, validVlan,
   linkIsTrunk, accessVlanOf, usesVlans, NATIVE_VLAN,
   emptyTables, mergeLearned, arpTableOf, macTableOf,
+  applyDhcp, dhcpTrace, poolConfig, parsePool, defaultPool,
 } from "./topoEngine.js";
 import "./topology.css";
 
@@ -67,13 +68,15 @@ export default function TopologyBuilder() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(topo)); } catch { /* storage unavailable */ }
   }, [topo]);
 
-  const issues = useMemo(() => problems(topo), [topo]);
-  const pcs = topo.devices.filter(d => d.type === "pc");
-  const targets = topo.devices.flatMap(d => interfaces(d).map(f => ({ d, f })))
+  // `topo` is what the user configured; `live` is what the network sees, with DHCP leases applied
+  const { topo: live, leases } = useMemo(() => applyDhcp(topo), [topo]);
+  const issues = useMemo(() => problems(live), [live]);
+  const pcs = live.devices.filter(d => d.type === "pc");
+  const targets = live.devices.flatMap(d => interfaces(d).map(f => ({ d, f })))
     .map(({ d, f }) => ({ ip: numToIp(f.a.ip), label: `${d.name}${d.type === "router" ? ` ${f.name}` : ""} · ${numToIp(f.a.ip)}` }));
-  const vlanMode = usesVlans(topo);
+  const vlanMode = usesVlans(live);
   const srcId = pcs.some(p => p.id === src) ? src : pcs[0]?.id || "";
-  const dstIp = targets.some(t => t.ip === dst) ? dst : targets.filter(t => !deviceIps(deviceById(topo, srcId) || { ports:[] }).map(numToIp).includes(t.ip)).at(-1)?.ip || "";
+  const dstIp = targets.some(t => t.ip === dst) ? dst : targets.filter(t => !deviceIps(deviceById(live, srcId) || { ports:[] }).map(numToIp).includes(t.ip)).at(-1)?.ip || "";
 
   const run    = result ? result[view] : null;
   const step   = run?.steps[Math.min(si, run.steps.length - 1)];
@@ -158,28 +161,46 @@ export default function TopologyBuilder() {
     setTopo(t => ({ ...t, devices: t.devices.map(d => d.id === id ? { ...d, x, y } : d) }));
   }
 
+  const stamp = () => new Date().toLocaleTimeString([], { hour:"2-digit", minute:"2-digit", second:"2-digit" });
+
   function runTrace(fromId = srcId, toIp = dstIp) {
-    const srcDev = deviceById(topo, fromId);
+    const srcDev = deviceById(live, fromId);
     if (!srcDev || !toIp) return;
-    const fwd = trace(topo, fromId, toIp);
-    const owner = topo.devices.find(d => deviceIps(d).map(numToIp).includes(toIp));
+    const fwd = trace(live, fromId, toIp);
+    const owner = live.devices.find(d => deviceIps(d).map(numToIp).includes(toIp));
     const srcAddr = portAddr(srcDev, 0);
     const rev = fwd.ok && owner?.type === "pc" && owner.id !== fromId && srcAddr
-      ? trace(topo, owner.id, numToIp(srcAddr.ip)) : null;
+      ? trace(live, owner.id, numToIp(srcAddr.ip)) : null;
     const n = (pings[0]?.n || 0) + 1;
     setTables(t => mergeLearned(mergeLearned(t, fwd.learned, n), rev?.learned, n));
     setPings(p => [{
-      n, time: new Date().toLocaleTimeString([], { hour:"2-digit", minute:"2-digit", second:"2-digit" }),
-      srcId: fromId, dstIp: toIp,
+      n, type:"Ping", time: stamp(), srcId: fromId, dstIp: toIp,
       from: `${srcDev.name} (${srcAddr ? numToIp(srcAddr.ip) : "no IP"})`,
       to: targets.find(t => t.ip === toIp)?.label || toIp,
       fwdOk: fwd.ok, revOk: rev ? rev.ok : null,
-      routers: fwd.steps.filter(s => s.kind === "route" && deviceById(topo, s.at)?.type === "router").length,
+      routers: fwd.steps.filter(s => s.kind === "route" && deviceById(live, s.at)?.type === "router").length,
       ttl: fwd.ttl ?? null,
       reason: !fwd.ok ? fwd.reason : rev && !rev.ok ? `Reply: ${rev.reason}` : "",
     }, ...p].slice(0, 50));
     setSrc(fromId); setDst(toIp);
-    setResult({ fwd, rev });
+    setResult({ fwd, rev, kind:"ping" });
+    setView("fwd"); setSi(0); setPlaying(true);
+  }
+
+  function runDhcp(pcId) {
+    const pc = deviceById(live, pcId);
+    if (!pc?.dhcp) return;
+    const run = dhcpTrace(topo, leases, pcId);
+    const n = (pings[0]?.n || 0) + 1;
+    const l = leases[pcId];
+    setTables(t => mergeLearned(t, run.learned, n));
+    setPings(p => [{
+      n, type:"DHCP", time: stamp(), srcId: pcId, dhcp:true,
+      from: `${pc.name} (0.0.0.0)`, to: l.apipa ? "any DHCP server" : `DHCP server ${l.serverName}`,
+      fwdOk: run.ok, revOk: null, routers: null, ttl: null,
+      reason: run.ok ? `Leased ${numToIp(l.ip)}/${l.prefix}` : `${run.reason} (${numToIp(l.ip)})`,
+    }, ...p].slice(0, 50));
+    setResult({ fwd: run, rev: null, kind:"dhcp" });
     setView("fwd"); setSi(0); setPlaying(true);
   }
 
@@ -195,7 +216,7 @@ export default function TopologyBuilder() {
 
   const hotDevs  = new Set(step ? [step.at] : []);
   const hotLinks = new Set(step?.links || []);
-  const dotDev   = step ? deviceById(topo, step.at) : null;
+  const dotDev   = step ? deviceById(live, step.at) : null;
   const selDev   = sel?.kind === "dev" ? deviceById(topo, sel.id) : null;
   const selLink  = sel?.kind === "link" ? topo.links.find(l => l.id === sel.id) : null;
   const visited  = new Set(run ? run.steps.slice(0, si + 1).map(s => s.at) : []);
@@ -268,7 +289,7 @@ export default function TopologyBuilder() {
               );
             })}
 
-            {topo.devices.map(d => {
+            {live.devices.map(d => {
               const color = TYPE_COLOR[d.type];
               const hot = hotDevs.has(d.id), picked = sel?.kind === "dev" && sel.id === d.id;
               const isPending = pending === d.id;
@@ -283,11 +304,15 @@ export default function TopologyBuilder() {
                   <DeviceIcon d={d} color={color}/>
                   {hasIssue && <circle cx={d.x + 19} cy={d.y - 19} r={5} fill="#e63946"/>}
                   <text x={d.x} y={d.y + 38} textAnchor="middle" className="tb-devname">{d.name}</text>
-                  {d.type === "pc" && <text x={d.x} y={d.y + 50} textAnchor="middle" className="tb-devip">{d.ports[0].addr || "no IP"}</text>}
+                  {d.type === "pc" && (
+                    <text x={d.x} y={d.y + 50} textAnchor="middle" className={`tb-devip${d.lease?.apipa ? " tb-apipa" : ""}`}>
+                      {d.ports[0].addr || "no IP"}{d.dhcp ? (d.lease?.apipa ? " · APIPA" : " · DHCP") : ""}
+                    </text>
+                  )}
                   {d.type === "router" && ifs.map((f, k) => (
                     <text key={f.name} x={d.x} y={d.y + 50 + k * 11} textAnchor="middle" className="tb-devip"
                       style={vlanColor(f.tag) ? { fill:vlanColor(f.tag) } : undefined}>
-                      {f.name} {numToIp(f.a.ip)}/{f.a.prefix}
+                      {f.name} {numToIp(f.a.ip)}/{f.a.prefix}{poolConfig(d, f) ? " · DHCP" : ""}
                     </text>
                   ))}
                   {pcVlan !== null && (
@@ -329,10 +354,10 @@ export default function TopologyBuilder() {
               Device tables
             </button>
           </div>
-          {panel === "log" && <PingLog pings={pings} onReplay={p => runTrace(p.srcId, p.dstIp)} onClear={() => setPings([])}/>}
-          {panel === "hops" && <HopTable topo={topo} run={run} view={view} si={si}
+          {panel === "log" && <PingLog pings={pings} onReplay={p => (p.dhcp ? runDhcp(p.srcId) : runTrace(p.srcId, p.dstIp))} onClear={() => setPings([])}/>}
+          {panel === "hops" && <HopTable topo={live} run={run} view={view} si={si}
             onPick={i => { setPlaying(false); setSi(i); }}/>}
-          {panel === "tables" && <DeviceTables topo={topo} tables={tables}
+          {panel === "tables" && <DeviceTables topo={live} tables={tables} leases={leases}
             onPick={id => setSel({ kind:"dev", id })} onClear={() => setTables(emptyTables())}/>}
         </div>
         </div>
@@ -349,7 +374,7 @@ export default function TopologyBuilder() {
             </details>
           )}
 
-          {selDev && <Inspector d={selDev} topo={topo} edit={edit}/>}
+          {selDev && <Inspector d={selDev} topo={topo} live={live} edit={edit} onDhcp={runDhcp}/>}
           {selLink && <LinkInspector l={selLink} topo={topo} onDelete={deleteSelected}/>}
 
           <div className="tb-card">
@@ -373,7 +398,7 @@ export default function TopologyBuilder() {
                 <div className="tb-verdicts">
                   <button className={`tb-verdict ${result.fwd.ok ? "ok" : "bad"}${view === "fwd" ? " on" : ""}`}
                     onClick={() => { setView("fwd"); setSi(0); setPlaying(false); }}>
-                    {result.fwd.ok ? "✓" : "✗"} Request
+                    {result.fwd.ok ? "✓" : "✗"} {result.kind === "dhcp" ? "DHCP lease" : "Request"}
                   </button>
                   {result.rev && (
                     <button className={`tb-verdict ${result.rev.ok ? "ok" : "bad"}${view === "rev" ? " on" : ""}`}
@@ -403,6 +428,7 @@ export default function TopologyBuilder() {
                           <tr><th>L3 src IP</th><td>{step.frame.srcIp}</td></tr>
                           <tr><th>L3 dst IP</th><td>{step.frame.dstIp}</td></tr>
                           <tr><th>TTL</th><td>{step.frame.ttl}</td></tr>
+                          {step.frame.app && <tr><th>Payload</th><td>{step.frame.app}</td></tr>}
                           {vlanMode && (
                             <tr><th>802.1Q</th><td style={vlanColor(step.frame.tag ?? step.frame.vlan) ? { color:vlanColor(step.frame.tag ?? step.frame.vlan) } : undefined}>
                               {step.frame.tag !== null && step.frame.tag !== undefined
@@ -447,9 +473,11 @@ function peerText(topo, d, i) {
   return l ? `→ ${portLabel(topo, otherEnd(l, d.id, i))}` : "no cable";
 }
 
-function Inspector({ d, topo, edit }) {
+function Inspector({ d, topo, live, edit, onDhcp }) {
   const set = fn => edit(t => fn(deviceById(t, d.id)));
   const color = TYPE_COLOR[d.type];
+  const ld = deviceById(live, d.id);
+  const lease = ld?.lease;
   return (
     <div className="tb-card">
       <div className="tb-card-title" style={{ color }}>
@@ -458,10 +486,33 @@ function Inspector({ d, topo, edit }) {
       <Field label="Name" value={d.name} onChange={v => set(x => { x.name = v; })}/>
 
       {d.type === "pc" && <>
-        <Field label="IP address / prefix" value={d.ports[0].addr} placeholder="192.168.1.10/24"
-          onChange={v => set(x => { x.ports[0].addr = v; })} check={d.ports[0].addr ? parseAddr(d.ports[0].addr) : null}/>
-        <Field label="Default gateway" value={d.gw} placeholder="192.168.1.1"
-          onChange={v => set(x => { x.gw = v; })} check={d.gw && parseIp(d.gw) === null ? { error:"Not a valid IP" } : null}/>
+        <div className="tb-seg" role="radiogroup" aria-label="Address assignment">
+          <button role="radio" aria-checked={!d.dhcp} className={!d.dhcp ? "on" : ""} onClick={() => set(x => {
+            x.dhcp = false;
+            if (!x.ports[0].addr && lease && !lease.apipa) { x.ports[0].addr = ld.ports[0].addr; x.gw = ld.gw; }
+          })}>Static IP</button>
+          <button role="radio" aria-checked={!!d.dhcp} className={d.dhcp ? "on" : ""} onClick={() => set(x => { x.dhcp = true; })}>DHCP</button>
+        </div>
+        {!d.dhcp && <>
+          <Field label="IP address / prefix" value={d.ports[0].addr} placeholder="192.168.1.10/24"
+            onChange={v => set(x => { x.ports[0].addr = v; })} check={d.ports[0].addr ? parseAddr(d.ports[0].addr) : null}/>
+          <Field label="Default gateway" value={d.gw} placeholder="192.168.1.1"
+            onChange={v => set(x => { x.gw = v; })} check={d.gw && parseIp(d.gw) === null ? { error:"Not a valid IP" } : null}/>
+        </>}
+        {d.dhcp && <>
+          {lease && !lease.apipa && (
+            <dl className="tb-facts tb-lease">
+              <dt>Leased IP</dt><dd>{ld.ports[0].addr}</dd>
+              <dt>Gateway</dt><dd>{ld.gw}</dd>
+              <dt>DHCP server</dt><dd>{lease.serverName}</dd>
+              <dt>Lease time</dt><dd>24 hours</dd>
+            </dl>
+          )}
+          {lease?.apipa && (
+            <p className="tb-errbox">No lease — {lease.error} {d.name} gave itself the APIPA address {ld.ports[0].addr} and has no gateway.</p>
+          )}
+          <button className="tb-btn tb-full" onClick={() => onDhcp(d.id)}>▶ Show DHCP: Discover → Offer → Request → Ack</button>
+        </>}
         <dl className="tb-facts">
           <dt>MAC</dt><dd>{macOf(d, 0)}</dd>
           <dt>eth0</dt><dd>{peerText(topo, d, 0)}</dd>
@@ -532,6 +583,34 @@ function Inspector({ d, topo, edit }) {
             </button>
           </div>
         ))}
+        <div className="tb-subtitle">DHCP server</div>
+        {interfaces(d).length === 0 && <p className="tb-note">Give an interface an IP address first — each pool hands out addresses from its interface's subnet.</p>}
+        {interfaces(d).map(f => {
+          const cfg = poolConfig(d, f);
+          const pool = cfg ? parsePool(cfg, f) : null;
+          const setPool = val => set(x => {
+            const target = f.tag === null ? x.ports[f.port] : x.ports[f.port].subs.find(s => Number(s.vlan) === f.tag);
+            if (!target) return;
+            if (val) target.dhcp = val; else delete target.dhcp;
+          });
+          return (
+            <div key={f.name} className="tb-pool">
+              <label className="tb-check">
+                <input type="checkbox" checked={!!cfg} onChange={e => setPool(e.target.checked ? defaultPool(f) : null)}/>
+                <b>{f.name}</b><span>{numToIp(f.a.net)}/{f.a.prefix}</span>
+              </label>
+              {cfg && (
+                <div className="tb-pool-range">
+                  <input className={pool?.error ? "tb-bad" : ""} value={cfg.start} onChange={e => setPool({ ...cfg, start:e.target.value })}/>
+                  <span>to</span>
+                  <input className={pool?.error ? "tb-bad" : ""} value={cfg.end} onChange={e => setPool({ ...cfg, end:e.target.value })}/>
+                </div>
+              )}
+              {pool?.error && <span className="tb-err">{pool.error}</span>}
+              {pool && !pool.error && <span className="tb-pool-info">{pool.size} address{pool.size === 1 ? "" : "es"} · clients get gateway {numToIp(f.a.ip)}</span>}
+            </div>
+          );
+        })}
         <div className="tb-subtitle">Static routes</div>
         {(d.routes || []).map((r, i) => (
           <div key={i} className="tb-route">
@@ -570,20 +649,21 @@ function PingLog({ pings, onReplay, onClear }) {
       <div className="tb-tablewrap">
         <table className="tb-grid">
           <thead>
-            <tr><th>#</th><th>Time</th><th>From</th><th>To</th><th>Request</th><th>Reply</th><th>Routers</th><th>TTL</th><th>What happened</th></tr>
+            <tr><th>#</th><th>Type</th><th>Time</th><th>From</th><th>To</th><th>Request</th><th>Reply</th><th>Routers</th><th>TTL</th><th>What happened</th></tr>
           </thead>
           <tbody>
             {pings.map(p => (
-              <tr key={p.n} className="tb-click" onClick={() => onReplay(p)} title="Click to send this ping again">
+              <tr key={p.n} className="tb-click" onClick={() => onReplay(p)} title="Click to run this again">
                 <td>{p.n}</td>
+                <td>{p.type || "Ping"}</td>
                 <td className="mono">{p.time}</td>
                 <td>{p.from}</td>
                 <td>{p.to}</td>
-                <td className={p.fwdOk ? "ok" : "bad"}>{p.fwdOk ? "✓ arrived" : "✗ dropped"}</td>
+                <td className={p.fwdOk ? "ok" : "bad"}>{p.dhcp ? (p.fwdOk ? "✓ leased" : "✗ no offer") : p.fwdOk ? "✓ arrived" : "✗ dropped"}</td>
                 <td className={p.revOk === null ? "" : p.revOk ? "ok" : "bad"}>{p.revOk === null ? "—" : p.revOk ? "✓ arrived" : "✗ dropped"}</td>
-                <td>{p.fwdOk ? p.routers : "—"}</td>
+                <td>{p.fwdOk && p.routers !== null ? p.routers : "—"}</td>
                 <td>{p.ttl ?? "—"}</td>
-                <td className={p.reason ? "bad" : ""}>{p.reason || (p.revOk ? "Delivered both ways" : "Delivered")}</td>
+                <td className={p.fwdOk && (p.dhcp || !p.reason) ? "" : "bad"}>{p.reason || (p.revOk ? "Delivered both ways" : "Delivered")}</td>
               </tr>
             ))}
           </tbody>
@@ -648,7 +728,7 @@ function MiniTable({ cols, rows, empty }) {
 
 const TYPE_ORDER = { router:0, switch:1, pc:2 };
 
-function DeviceTables({ topo, tables, onPick, onClear }) {
+function DeviceTables({ topo, tables, leases, onPick, onClear }) {
   const [filter, setFilter] = useState("infra");
   const valid = filter === "infra" || filter === "all" || topo.devices.some(d => d.id === filter);
   const f = valid ? filter : "infra";
@@ -691,6 +771,16 @@ function DeviceTables({ topo, tables, onPick, onClear }) {
               <div className="tb-subtitle">ARP table</div>
               <MiniTable cols={["IP", "MAC", "Interface", "Ping"]} empty={EMPTY}
                 rows={arpTableOf(tables, d.id).map(e => ({ c:[e.ip, e.mac, e.iface, `#${e.ping}`], cls:fresh(e) }))}/>
+              {interfaces(d).some(f => poolConfig(d, f)) && <>
+                <div className="tb-subtitle">DHCP bindings</div>
+                <MiniTable cols={["IP", "Client MAC", "Client", "Interface"]} empty="No clients have leased an address"
+                  rows={Object.entries(leases).filter(([, l]) => l.server === d.id)
+                    .sort(([, a], [, b]) => a.ip - b.ip)
+                    .map(([id, l]) => {
+                      const c = deviceById(topo, id);
+                      return { c:[numToIp(l.ip), macOf(c, 0), c.name, l.iface] };
+                    })}/>
+              </>}
             </>}
 
             {d.type === "switch" && <>
@@ -708,7 +798,7 @@ function DeviceTables({ topo, tables, onPick, onClear }) {
 
             {d.type === "pc" && <>
               <dl className="tb-facts">
-                <dt>IP</dt><dd>{d.ports[0].addr || "none"}</dd>
+                <dt>IP</dt><dd>{d.ports[0].addr || "none"}{d.dhcp ? (d.lease?.apipa ? " (APIPA)" : " (DHCP)") : ""}</dd>
                 <dt>Gateway</dt><dd>{d.gw || "none"}</dd>
                 <dt>MAC</dt><dd>{macOf(d, 0)}</dd>
               </dl>

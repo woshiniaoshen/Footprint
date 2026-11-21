@@ -238,6 +238,154 @@ export function segment(topo, devId, port, tag = null) {
   return { endpoints, drops, entered, loop, unplugged:false };
 }
 
+// ── DHCP ──────────────────────────────────────────────────────────────────────
+export const BROADCAST_MAC = "FF:FF:FF:FF:FF:FF";
+
+// Raw pool config attached to a router interface (physical port or subinterface)
+export function poolConfig(d, f) {
+  if (d?.type !== "router" || !f) return null;
+  if (f.tag === null) return d.ports[f.port].dhcp || null;
+  return (d.ports[f.port].subs || []).find(s => Number(s.vlan) === f.tag)?.dhcp || null;
+}
+
+export function parsePool(pool, f) {
+  if (!pool) return null;
+  const start = parseIp(pool.start), end = parseIp(pool.end);
+  if (start === null || end === null) return { error:"Pool start and end must be IP addresses" };
+  if (!inNet(start, f.a) || !inNet(end, f.a)) return { error:`Pool must be inside ${netStr(f.a)}` };
+  if (start > end) return { error:"Pool start is after pool end" };
+  if (start === f.a.net || end === f.a.bc) return { error:"Pool can't include the network or broadcast address" };
+  return { start, end, size: end - start + 1 };
+}
+
+export function defaultPool(f) {
+  const first = Math.min(f.a.net + 100, f.a.bc - 1);
+  const last  = Math.min(f.a.net + 199, f.a.bc - 1);
+  const start = first <= f.a.ip && f.a.ip <= last ? f.a.ip + 1 : first;
+  return { start:numToIp(Math.min(start, last)), end:numToIp(last) };
+}
+
+const apipaFor = pc => ({ ip: ipToNum(`169.254.${1 + Math.floor(pc.num / 250) % 254}.${(pc.num % 250) + 1}`), prefix:16 });
+
+// Hand out leases. DHCP clients never see each other's leases as "static", so order is by PC number.
+export function dhcpLeases(topo) {
+  const base = structuredClone(topo);
+  for (const d of base.devices) if (d.type === "pc" && d.dhcp) { d.ports[0].addr = ""; d.gw = ""; }
+  const used = new Set(base.devices.flatMap(d => deviceIps(d)));
+  const leases = {};
+  const clients = base.devices.filter(d => d.type === "pc" && d.dhcp).sort((a, b) => a.num - b.num);
+  for (const pc of clients) {
+    const fallback = why => { leases[pc.id] = { apipa:true, ...apipaFor(pc), error:why }; };
+    const seg = segment(base, pc.id, 0, null);
+    if (seg.unplugged) { fallback("No cable — the DHCP Discover can't go anywhere"); continue; }
+    const offers = seg.endpoints
+      .map(e => { const dev = deviceById(base, e.dev); const f = ifaceAt(dev, e.port, e.tag); return { e, dev, f, cfg: poolConfig(dev, f) }; })
+      .filter(x => x.f && x.cfg);
+    if (!offers.length) {
+      const blocked = seg.drops.length ? ` On the way: ${seg.drops.map(x => x.why).join("; ")}.` : "";
+      fallback(`No DHCP server in this broadcast domain answered.${blocked}`);
+      continue;
+    }
+    const { e, dev, f, cfg } = offers[0];
+    const pool = parsePool(cfg, f);
+    if (pool.error) { fallback(`${dev.name} ${f.name}'s pool is misconfigured: ${pool.error}`); continue; }
+    let ip = null;
+    for (let n = pool.start; n <= pool.end; n++) if (n !== f.a.ip && !used.has(n)) { ip = n; break; }
+    if (ip === null) { fallback(`${dev.name} ${f.name}'s pool is full — ${pool.size === 1 ? "its only address is" : `all ${pool.size} addresses are`} in use`); continue; }
+    used.add(ip);
+    leases[pc.id] = { ip, prefix:f.a.prefix, gw:f.a.ip, server:dev.id, serverName:`${dev.name} ${f.name}`,
+      iface:f.name, endpoint:e, pool, offers:offers.length };
+  }
+  return leases;
+}
+
+// The topology as the network sees it: DHCP clients carry their leased (or APIPA) address
+export function applyDhcp(topo) {
+  const leases = dhcpLeases(topo);
+  const live = structuredClone(topo);
+  for (const d of live.devices) {
+    const l = leases[d.id];
+    if (!l) continue;
+    d.ports[0].addr = `${numToIp(l.ip)}/${l.prefix}`;
+    d.gw = l.apipa ? "" : numToIp(l.gw);
+    d.lease = l;
+  }
+  return { topo:live, leases };
+}
+
+const revHop = h => ({ sw:h.sw, inPort:h.outPort, outPort:h.inPort, vlan:h.vlan, tagIn:h.tagOut, tagOut:h.tagIn, inMode:h.outMode, outMode:h.inMode });
+
+// Replays the DHCP exchange (Discover, Offer, Request, Ack) for one client on the base topology
+export function dhcpTrace(topo, leases, pcId) {
+  const steps = [];
+  const learned = { arp:[], mac:[] };
+  const pc = deviceById(topo, pcId);
+  if (!pc?.dhcp) return { ok:false, steps:[{ kind:"drop", at:pcId, title:"This PC uses a static address", links:[] }], learned, reason:"Static address" };
+  const lease = leases[pcId];
+  const mac = macOf(pc, 0);
+  const base = structuredClone(topo);
+  base.devices.forEach(d => { if (d.type === "pc" && d.dhcp) { d.ports[0].addr = ""; d.gw = ""; } });
+  const seg = segment(base, pcId, 0, null);
+  for (const e of seg.entered) learned.mac.push({ sw:e.sw, vlan:e.vlan, mac, port:e.port, host:`${pc.name} eth0` });
+
+  const discover = { srcMac:mac, dstMac:BROADCAST_MAC, srcIp:"0.0.0.0", dstIp:"255.255.255.255", ttl:64 };
+  steps.push({ kind:"send", at:pcId, links:[], frame:{ ...discover, tag:null, app:"DHCP DISCOVER" },
+    title:`${pc.name} broadcasts DHCP DISCOVER`,
+    detail:`${pc.name} has no IP yet, so it sends from 0.0.0.0 to 255.255.255.255 with destination MAC ${BROADCAST_MAC}. Switches flood it to every port in the same VLAN.` });
+
+  if (lease.apipa) {
+    seg.entered.forEach(e => steps.push({ kind:"switch", at:e.sw, links:[], frame:{ ...discover, tag:null, vlan:e.vlan, app:"DHCP DISCOVER" },
+      title:`${deviceById(topo, e.sw).name} floods the broadcast in VLAN ${e.vlan}`, detail:"A broadcast goes out every port in its VLAN except the one it came in on." }));
+    steps.push({ kind:"drop", at:pcId, links:seg.drops.flatMap(x => x.links), title:"No DHCP OFFER came back",
+      detail:`${lease.error} After a few retries ${pc.name} gives itself an APIPA address, ${numToIp(lease.ip)}/16 — it can only talk to other APIPA hosts on the same segment, and has no gateway.` });
+    return { ok:false, steps, learned, reason:"No DHCP server — fell back to APIPA" };
+  }
+
+  const srv = deviceById(topo, lease.server);
+  const srvIface = lease.iface;
+  const srvMac = macOf(srv, lease.endpoint.port);
+  const { links, hops } = lease.endpoint;
+  const rLinks = [...links].reverse(), rHops = [...hops].reverse().map(revHop);
+  const offered = numToIp(lease.ip), gw = numToIp(lease.gw);
+  const toServer = (frame, label) => {
+    hops.forEach((h, i) => steps.push({ kind:"switch", at:h.sw, links:links.slice(0, i + 1), frame:{ ...frame, tag:h.tagOut, vlan:h.vlan, app:label },
+      title:`${deviceById(topo, h.sw).name}: floods ${label.replace("DHCP ", "")} in VLAN ${h.vlan}`,
+      detail:`Broadcast in on ${portName("switch", h.inPort)}, copied out every other VLAN ${h.vlan} port including ${portName("switch", h.outPort)}.` }));
+    steps.push({ kind:"arrive", at:srv.id, links, frame:{ ...frame, tag:lease.endpoint.tag, app:label },
+      title:`${srv.name} ${srvIface} receives ${label}`, detail:"" });
+  };
+  const toClient = (frame, label) => {
+    steps.push({ kind:"send", at:srv.id, links:[], frame:{ ...frame, tag:lease.endpoint.tag, app:label },
+      title:`${srv.name} ${srvIface} sends ${label}`, detail:"" });
+    rHops.forEach((h, i) => steps.push({ kind:"switch", at:h.sw, links:rLinks.slice(0, i + 1), frame:{ ...frame, tag:h.tagOut, vlan:h.vlan, app:label },
+      title:`${deviceById(topo, h.sw).name}: in ${portName("switch", h.inPort)} → out ${portName("switch", h.outPort)} (VLAN ${h.vlan})`,
+      detail:`${pc.name}'s MAC was learned from the DISCOVER, so this is forwarded only toward ${pc.name}.` }));
+    steps.push({ kind:"arrive", at:pcId, links:rLinks, frame:{ ...frame, tag:null, app:label }, title:`${pc.name} receives ${label}`, detail:"" });
+  };
+
+  toServer(discover, "DHCP DISCOVER");
+  steps.at(-1).detail = `${srvIface} has a DHCP pool (${numToIp(lease.pool.start)}–${numToIp(lease.pool.end)}). The lowest free address is ${offered}.`
+    + (lease.offers > 1 ? ` (${lease.offers} servers could answer — the client takes the first offer.)` : "");
+  const offer = { srcMac:srvMac, dstMac:mac, srcIp:gw, dstIp:"255.255.255.255", ttl:64 };
+  const offerAt = steps.length;
+  toClient(offer, "DHCP OFFER");
+  steps[offerAt].detail = `Offers ${offered}/${lease.prefix} with gateway ${gw} and a 24-hour lease.`;
+  steps.at(-1).detail = `${pc.name} sees the offer of ${offered}. It still has no IP — it must formally request it.`;
+  const request = { ...discover };
+  steps.push({ kind:"send", at:pcId, links:[], frame:{ ...request, tag:null, app:"DHCP REQUEST" }, title:`${pc.name} broadcasts DHCP REQUEST for ${offered}`,
+    detail:"Still broadcast, so any other DHCP servers that made an offer learn that theirs was declined." });
+  toServer(request, "DHCP REQUEST");
+  steps.at(-1).detail = `${srv.name} records the binding ${offered} ↔ ${mac}.`;
+  for (const h of rHops) learned.mac.push({ sw:h.sw, vlan:h.vlan, mac:srvMac, port:h.inPort, host:`${srv.name} ${srvIface}` });
+  const ackAt = steps.length;
+  toClient({ ...offer }, "DHCP ACK");
+  steps[ackAt].detail = `Confirms ${offered}/${lease.prefix}, gateway ${gw}, lease time 24 hours.`;
+  steps.at(-1).detail = `${pc.name} applies the lease.`;
+  steps.push({ kind:"deliver", at:pcId, links:[], title:`${pc.name} is configured: ${offered}/${lease.prefix}, gateway ${gw}`,
+    detail:`Lease from ${srv.name} ${srvIface}, valid 24 hours. ${pc.name} can now ARP for its gateway and send traffic.` });
+  return { ok:true, steps, learned };
+}
+
 // ── Routing ───────────────────────────────────────────────────────────────────
 export function routingTable(topo, r) {
   const rows = [];
@@ -442,6 +590,15 @@ export function problems(topo) {
       });
       if (subs.length && !wired) add("warn", d.id, `${d.name} ${pn} has subinterfaces but no cable`);
     });
+    if (d.type === "pc" && d.dhcp && d.lease?.apipa) {
+      add("warn", d.id, `${d.name} got no DHCP lease and fell back to APIPA ${numToIp(d.lease.ip)}: ${d.lease.error}`);
+    }
+    if (d.type === "router") {
+      interfaces(d).forEach(f => {
+        const pool = parsePool(poolConfig(d, f), f);
+        if (pool?.error) add("error", d.id, `${d.name} ${f.name} DHCP pool: ${pool.error}`);
+      });
+    }
     if (d.type === "pc") {
       const a = portAddr(d, 0);
       if (d.gw) {
@@ -488,8 +645,10 @@ export function problems(topo) {
       members.forEach(m => visited.add(`${m.dev}:${m.port}:${m.tag}`));
       if (seg.loop) add("warn", d.id, "Switches form a loop — a real network needs Spanning Tree to block one link");
       const label = m => `${deviceById(topo, m.dev).name} ${m.f.name}`;
-      const first = members[0];
-      const odd = members.find(m => m.f.a.net !== first.f.a.net || m.f.a.prefix !== first.f.a.prefix);
+      // APIPA hosts already get their own warning
+      const real = members.filter(m => !deviceById(topo, m.dev).lease?.apipa);
+      const first = real[0];
+      const odd = first && real.find(m => m.f.a.net !== first.f.a.net || m.f.a.prefix !== first.f.a.prefix);
       if (odd) add("warn", odd.dev,
         `${label(first)} (${netStr(first.f.a)}) and ${label(odd)} (${netStr(odd.f.a)}) share a broadcast domain but are on different subnets`);
     }
@@ -506,7 +665,11 @@ function build(spec) {
     (cfg.addrs || []).forEach((a, i) => { d.ports[i].addr = a; });
     if (cfg.gw) d.gw = cfg.gw;
     if (cfg.routes) d.routes = cfg.routes.map(([dest, via]) => ({ dest, via }));
-    Object.entries(cfg.subs || {}).forEach(([i, subs]) => { d.ports[i].subs = subs.map(([vlan, addr]) => ({ vlan:String(vlan), addr })); });
+    if (cfg.dhcp) d.dhcp = true;
+    Object.entries(cfg.subs || {}).forEach(([i, subs]) => {
+      d.ports[i].subs = subs.map(([vlan, addr, pool]) => ({ vlan:String(vlan), addr, ...(pool ? { dhcp:{ start:pool[0], end:pool[1] } } : {}) }));
+    });
+    Object.entries(cfg.pools || {}).forEach(([i, [start, end]]) => { d.ports[i].dhcp = { start, end }; });
     Object.entries(cfg.sw || {}).forEach(([i, p]) => { Object.assign(d.ports[i], p); });
     topo.devices.push(d);
   }
@@ -550,6 +713,19 @@ const VLAN_CAMPUS = uplinkAllowed => ({
   ],
 });
 
+const DHCP_CAMPUS = vlan20Pool => {
+  const spec = VLAN_CAMPUS("");
+  spec.devices = spec.devices.map(([type, num, x, y, cfg = {}]) => {
+    if (type === "pc") return [type, num, x, y, { dhcp:true }];
+    if (type === "router") return [type, num, x, y, { subs:{ 0:[
+      [10, "192.168.10.1/24", ["192.168.10.100", "192.168.10.199"]],
+      [20, "192.168.20.1/24", vlan20Pool ? ["192.168.20.100", "192.168.20.199"] : null],
+    ] } }];
+    return [type, num, x, y, cfg];
+  });
+  return spec;
+};
+
 export const PRESETS = [
   { id:"classic", name:"Two LANs, one router", hint:"The guided walkthrough's network",
     build: () => build({
@@ -570,5 +746,9 @@ export const PRESETS = [
     build: () => build(THREE_ROUTERS(false)) },
   { id:"vlanpuzzle", name:"Puzzle: PC4 is cut off", hint:"PC3 works fine, but PC4 can't reach anything beyond SW2. Find the misconfigured port.",
     build: () => build(VLAN_CAMPUS("10")) },
+  { id:"dhcp", name:"DHCP on two VLANs", hint:"Every PC gets its address from R1. Select a PC and press “Show DHCP” to watch Discover, Offer, Request and Ack.",
+    build: () => build(DHCP_CAMPUS(true)) },
+  { id:"dhcppuzzle", name:"Puzzle: 169.254 addresses", hint:"PC2 and PC4 ended up with 169.254.x.x addresses and can't reach anything off their segment. Why?",
+    build: () => build(DHCP_CAMPUS(false)) },
   { id:"empty", name:"Empty canvas", hint:"Start from scratch", build: () => ({ devices:[], links:[] }) },
 ];

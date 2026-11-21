@@ -21,7 +21,7 @@ const projects = [
   {
     name: "OSI Layer Explorer",
     type: "Teaching tool",
-    summary: "Steps through how a packet crosses all seven OSI layers between two LANs, showing each header as it is added and removed. Includes a topology builder for switches, routers and VLAN trunks.",
+    summary: "Steps through how a packet crosses all seven OSI layers between two LANs, showing each header as it is added and removed. Includes a topology builder for switches, routers, VLAN trunks and DHCP.",
     stack: ["React", "Networking", "VLANs"],
     links: [{ label: "Open explorer", href: "/osi/" }],
   },
