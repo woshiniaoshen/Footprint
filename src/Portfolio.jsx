@@ -48,23 +48,35 @@ const background = [
     heading: "Education",
     items: [
       { period: "2025 – 2029", org: "Singapore Management University", detail: "BSc Computer Science, Cybersecurity track", status: "In progress" },
-      { period: "2020 – 2023", org: "Nanyang Polytechnic", detail: "Diploma with Merit in Infocomm & Media Engineering, Cloud and Infrastructure Services" },
+      { period: "2020 – 2023", org: "Nanyang Polytechnic", detail: "Diploma with Merit in Infocomm & Media Engineering, Cloud and Infrastructure Services · Director's List, three consecutive semesters" },
     ],
   },
   {
     heading: "Certifications",
     items: [
-      { period: "In progress", org: "Google Cybersecurity Certificate", detail: "Coursera" },
+      {
+        period: "2026",
+        org: "Google Cybersecurity Certificate",
+        detail: "Coursera",
+        status: "In progress",
+        courses: [
+          { name: "Foundations of Cybersecurity", date: "May 2026", href: "https://coursera.org/verify/ZA07YAJ39M2F" },
+          { name: "Play It Safe: Manage Security Risks", date: "Jul 2026", href: "https://coursera.org/verify/9WKZ25SOVCQD" },
+          { name: "Connect and Protect: Networks and Network Security", date: "Jul 2026", href: "https://coursera.org/verify/LXD64Q13JJ5L" },
+        ],
+      },
       { period: "Dec 2022", org: "Google IT Support Specialization", detail: "Coursera · 5 courses, including IT Security and Computer Networking", href: "https://www.coursera.org/account/accomplishments/specialization/certificate/SK3WM4BMRK5Y" },
     ],
   },
 ];
 
 const skills = [
-  { group: "Security", items: "Attack detection, packet analysis, networking, VLANs" },
-  { group: "Languages", items: "JavaScript, Python, Java, C#, PHP, SQL" },
-  { group: "Infrastructure", items: "AWS, Docker, Cloudflare, cloud infrastructure" },
-  { group: "Other", items: "React, MySQL, UX design" },
+  { group: "Security", items: "Attack detection, packet analysis, security risk management, network security" },
+  { group: "Networking", items: "Cisco IOS routing and switching, VLANs, DHCP, DNS (BIND), Apache, IIS" },
+  { group: "Systems", items: "AWS, Docker, VMware ESXi, Windows Server, Active Directory, Ubuntu" },
+  { group: "Programming", items: "JavaScript, Python, Java, C#, PHP, PowerShell, SQL" },
+  { group: "Tools", items: "React, MySQL, SQL Server, Cloudflare, UX design" },
+  { group: "Spoken", items: "English, Chinese" },
 ];
 
 function ProjectLink({ href, label, external }) {
@@ -171,6 +183,18 @@ export default function Portfolio() {
                             {e.status && <span className="status">{e.status}</span>}
                             {e.href && <> · <a className="inline-link" href={e.href} target="_blank" rel="noreferrer">Verify</a></>}
                           </p>
+                          {e.courses && (
+                            <ul className="courses" aria-label="Completed courses">
+                              {e.courses.map(c => (
+                                <li key={c.name}>
+                                  <span>{c.name}</span>
+                                  <span className="course-meta">
+                                    {c.date} · <a className="inline-link" href={c.href} target="_blank" rel="noreferrer">Verify</a>
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
                         </div>
                       </li>
                     ))}
