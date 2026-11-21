@@ -8,6 +8,7 @@ import {
   applyDhcp, dhcpTrace, poolConfig, parsePool, defaultPool,
   isServer, webRequest, parseUrl,
   routerGraph, dijkstra, distanceVector, linkCost,
+  emptyNat, natRole, natEntriesOf,
 } from "./topoEngine.js";
 import "./topology.css";
 
@@ -16,7 +17,7 @@ const VIEW_W = 1000, VIEW_H = 460;
 const TYPE_COLOR = { pc:"#63b3ed", switch:"#42d9b8", router:"#fb923c", server:"#a78bfa" };
 const colorOf = d => (isServer(d) ? TYPE_COLOR.server : TYPE_COLOR[d.type]);
 const STAGES = ["DHCP", "DNS", "TCP", "HTTP"];
-const KIND_ICON = { route:"🧭", arp:"❓", send:"📤", switch:"🔀", arrive:"📥", deliver:"✅", drop:"⛔" };
+const KIND_ICON = { route:"🧭", arp:"❓", send:"📤", switch:"🔀", arrive:"📥", deliver:"✅", drop:"⛔", nat:"🔁" };
 const VLAN_PALETTE = ["#63b3ed", "#f2c36b", "#a78bfa", "#f472b6", "#4ade80", "#fb923c"];
 const vlanColor = v => (v && v !== NATIVE_VLAN ? VLAN_PALETTE[v % VLAN_PALETTE.length] : null);
 
@@ -66,6 +67,7 @@ export default function TopologyBuilder() {
   const [sendMode, setSendMode] = useState("web");
   const [url, setUrl]         = useState("www.cs204.edu");
   const [algo, setAlgo]       = useState({ kind:"dijkstra", src:"", iter:0 });
+  const [nat, setNat]         = useState(emptyNat);
   const svgRef  = useRef(null);
   const drag    = useRef(null);
   const listRef = useRef(null);
@@ -115,6 +117,7 @@ export default function TopologyBuilder() {
     setResult(null);
     setPlaying(false);
     setTables(emptyTables());
+    setNat(emptyNat());
   }
 
   function addDevice(type) {
@@ -162,7 +165,7 @@ export default function TopologyBuilder() {
       if (pending === d.id) { setPending(null); setMsg(""); return; }
       const next = structuredClone(topo);
       const res = connect(next, pending, d.id);
-      if (!res.error) { setTopo(next); setResult(null); setPlaying(false); setTables(emptyTables()); }
+      if (!res.error) { setTopo(next); setResult(null); setPlaying(false); setTables(emptyTables()); setNat(emptyNat()); }
       const a = deviceById(topo, pending);
       setMsg(res.error ? res.error : `Cabled ${a?.name} ↔ ${d.name}. Click another pair, or press Esc.`);
       setPending(null);
@@ -188,11 +191,16 @@ export default function TopologyBuilder() {
   function runTrace(fromId = srcId, toIp = dstIp) {
     const srcDev = deviceById(live, fromId);
     if (!srcDev || !toIp) return;
-    const fwd = trace(live, fromId, toIp);
+    const natState = structuredClone(nat);
+    const fwd = trace(live, fromId, toIp, { nat:natState });
     const owner = live.devices.find(d => deviceIps(d).map(numToIp).includes(toIp));
     const srcAddr = portAddr(srcDev, 0);
+    // The echo reply goes to whatever source address the destination saw (the NAT's public one, if any)
     const rev = fwd.ok && owner?.type === "pc" && owner.id !== fromId && srcAddr
-      ? trace(live, owner.id, numToIp(srcAddr.ip)) : null;
+      ? trace(live, owner.id, numToIp(fwd.final.srcIp), { nat:natState,
+          flow:{ proto:"ICMP", sport:fwd.final.sport, dport:fwd.final.sport, extra:"echo reply" } })
+      : null;
+    setNat(natState);
     const n = (pings[0]?.n || 0) + 1;
     setTables(t => mergeLearned(mergeLearned(t, fwd.learned, n), rev?.learned, n));
     setPings(p => [{
@@ -229,7 +237,8 @@ export default function TopologyBuilder() {
   function runWeb(pcId = srcId, address = url) {
     const pc = deviceById(live, pcId);
     if (!pc) return;
-    const run = webRequest(topo, live, leases, pcId, address);
+    const run = webRequest(topo, live, leases, pcId, address, structuredClone(nat));
+    setNat(run.nat);
     const n = (pings[0]?.n || 0) + 1;
     const failed = run.stages.find(s => !s.ok);
     setTables(t => mergeLearned(t, run.learned, n));
@@ -250,7 +259,7 @@ export default function TopologyBuilder() {
     const p = PRESETS.find(x => x.id === id);
     setTopo(p.build());
     setSel(null); setResult(null); setPending(null); setPlaying(false); setSrc(""); setDst("");
-    setPings([]); setTables(emptyTables());
+    setPings([]); setTables(emptyTables()); setNat(emptyNat());
     setMsg(p.hint);
   }
 
@@ -368,10 +377,17 @@ export default function TopologyBuilder() {
                   {d.type === "router" && ifs.length > 2 && (
                     <text x={d.x} y={d.y + 50} textAnchor="middle" className="tb-devip">{ifs.length} interfaces · click for details</text>
                   )}
+                  {d.type === "router" && d.ports.some((_, i) => natRole(d, i)) && (
+                    <g>
+                      <rect x={d.x + 10} y={d.y - 33} width={28} height={13} rx={6.5} fill="#0d1520" stroke="#f472b6"/>
+                      <text x={d.x + 24} y={d.y - 23.5} textAnchor="middle" className="tb-vlanpill" style={{ fill:"#f472b6" }}>NAT</text>
+                    </g>
+                  )}
                   {d.type === "router" && ifs.length <= 2 && ifs.map((f, k) => (
                     <text key={f.name} x={d.x} y={d.y + 50 + k * 11} textAnchor="middle" className="tb-devip"
                       style={vlanColor(f.tag) ? { fill:vlanColor(f.tag) } : undefined}>
                       {f.name} {numToIp(f.a.ip)}/{f.a.prefix}{poolConfig(d, f) ? " · DHCP" : ""}
+                      {f.tag === null && natRole(d, f.port) ? ` · NAT ${natRole(d, f.port)}` : ""}
                     </text>
                   ))}
                   {pcVlan !== null && (
@@ -417,9 +433,9 @@ export default function TopologyBuilder() {
             </button>
           </div>
           {panel === "log" && <PingLog pings={pings} onReplay={p => (p.web ? runWeb(p.srcId, p.url) : p.dhcp ? runDhcp(p.srcId) : runTrace(p.srcId, p.dstIp))} onClear={() => setPings([])}/>}
-          {panel === "hops" && <HopTable topo={live} run={run} view={view} si={si}
+          {panel === "hops" && <HopTable topo={live} run={run} view={view} si={si} vlan={vlanMode}
             onPick={i => { setPlaying(false); setSi(i); }}/>}
-          {panel === "tables" && <DeviceTables topo={live} tables={tables} leases={leases}
+          {panel === "tables" && <DeviceTables topo={live} tables={tables} leases={leases} nat={nat}
             onPick={id => setSel({ kind:"dev", id })} onClear={() => setTables(emptyTables())}/>}
           {panel === "routing" && <RoutingPanel graph={graph} algo={{ ...algo, src:algoSrc }} setAlgo={setAlgo} dj={dj} dv={dv}
             dynamic={!!topo.dynamic} onDynamic={on => edit(t => { t.dynamic = on; })}/>}
@@ -696,7 +712,16 @@ function Inspector({ d, topo, live, edit, onDhcp }) {
         <div className="tb-subtitle">Interfaces</div>
         {d.ports.map((p, i) => (
           <div key={i} className="tb-iface">
-            <div className="tb-iface-head"><b>{portName("router", i)}</b><span>{peerText(topo, d, i)}</span></div>
+            <div className="tb-iface-head">
+              <b>{portName("router", i)}</b>
+              <span>{peerText(topo, d, i)}</span>
+              <select className="tb-natsel" value={p.nat || ""} title="NAT role of this interface"
+                onChange={e => set(x => { if (e.target.value) x.ports[i].nat = e.target.value; else delete x.ports[i].nat; })}>
+                <option value="">no NAT</option>
+                <option value="inside">NAT inside</option>
+                <option value="outside">NAT outside</option>
+              </select>
+            </div>
             <Field label={(p.subs || []).length ? "Untagged address (optional)" : ""} value={p.addr}
               placeholder={(p.subs || []).length ? "none" : linkAt(topo, d.id, i) ? "10.0.0.1/24" : "unused"}
               onChange={v => set(x => { x.ports[i].addr = v; })} check={p.addr ? parseAddr(p.addr) : null}/>
@@ -785,6 +810,7 @@ function Inspector({ d, topo, live, edit, onDhcp }) {
   );
 }
 
+const shortL4 = s => s.replace(/ seq=.*/, "").replace(/^ICMP echo (request|reply) · /, "ICMP $1 ");
 const tagLabel = f => (f.tag !== null && f.tag !== undefined ? `tag ${f.tag}` : f.vlan ? `untagged (VLAN ${f.vlan})` : "untagged");
 
 function PingLog({ pings, onReplay, onClear }) {
@@ -822,7 +848,7 @@ function PingLog({ pings, onReplay, onClear }) {
   );
 }
 
-function HopTable({ topo, run, view, si, onPick }) {
+function HopTable({ topo, run, view, si, vlan, onPick }) {
   if (!run) return <p className="tb-note">Send a ping to see every step it takes: which device handled it and the MAC, IP, VLAN and TTL values at that point.</p>;
   const prevFrames = run.steps.map((_, i) => run.steps.slice(0, i).findLast(s => s.frame)?.frame ?? null);
   return (
@@ -834,7 +860,7 @@ function HopTable({ topo, run, view, si, onPick }) {
       <div className="tb-tablewrap">
         <table className="tb-grid">
           <thead>
-            <tr><th>#</th><th>Device</th><th>What happened</th><th>Src MAC</th><th>Dst MAC</th><th>Src IP</th><th>Dst IP</th><th>802.1Q</th><th>TTL</th></tr>
+            <tr><th>#</th><th>Device</th><th>What happened</th><th>Src MAC</th><th>Dst MAC</th><th>Src IP</th><th>Dst IP</th><th>Transport</th>{vlan && <th>802.1Q</th>}<th>TTL</th></tr>
           </thead>
           <tbody>
             {run.steps.map((s, i) => {
@@ -849,7 +875,8 @@ function HopTable({ topo, run, view, si, onPick }) {
                   <td className={`mono${chg("dstMac")}`}>{f?.dstMac ?? ""}</td>
                   <td className={`mono${chg("srcIp")}`}>{f?.srcIp ?? ""}</td>
                   <td className={`mono${chg("dstIp")}`}>{f?.dstIp ?? ""}</td>
-                  <td className={chg("tag").trim()}>{f ? tagLabel(f) : ""}</td>
+                  <td className={`mono${chg("l4")}`}>{f?.l4 ? shortL4(f.l4) : ""}</td>
+                  {vlan && <td className={chg("tag").trim()}>{f ? tagLabel(f) : ""}</td>}
                   <td className={chg("ttl").trim()}>{f?.ttl ?? s.ttl ?? ""}</td>
                 </tr>
               );
@@ -873,7 +900,7 @@ function MiniTable({ cols, rows, empty }) {
 
 const TYPE_ORDER = { router:0, switch:1, pc:2 };
 
-function DeviceTables({ topo, tables, leases, onPick, onClear }) {
+function DeviceTables({ topo, tables, leases, nat, onPick, onClear }) {
   const [filter, setFilter] = useState("infra");
   const valid = filter === "infra" || filter === "all" || topo.devices.some(d => d.id === filter);
   const f = valid ? filter : "infra";
@@ -925,6 +952,15 @@ function DeviceTables({ topo, tables, leases, onPick, onClear }) {
                       const c = deviceById(topo, id);
                       return { c:[numToIp(l.ip), macOf(c, 0), c.name, l.iface] };
                     })}/>
+              </>}
+              {d.ports.some((_, i) => natRole(d, i)) && <>
+                <div className="tb-subtitle">NAT translation table</div>
+                <MiniTable cols={["Proto", "Inside (private)", "Outside (public)", "Remote"]}
+                  empty="Empty — send traffic from an inside host to fill it"
+                  rows={natEntriesOf(nat, d.id).map(e => {
+                    const sock = (ip, port) => (e.proto === "ICMP" ? `${numToIp(ip)} id ${port}` : `${numToIp(ip)}:${port}`);
+                    return { c:[e.proto, sock(e.insideIp, e.insidePort), sock(e.outsideIp, e.outsidePort), sock(e.remoteIp, e.remotePort)] };
+                  })}/>
               </>}
             </>}
 

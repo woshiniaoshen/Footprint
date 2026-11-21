@@ -535,29 +535,44 @@ function lookup(table, dst) {
 
 const tagText = t => (t === null ? "untagged" : `802.1Q tag ${t}`);
 
+// ── NAT (port address translation) ────────────────────────────────────────────
+export const emptyNat = () => ({ entries:[], next:{} });
+export const natRole = (d, port) => (d?.type === "router" ? d.ports[port]?.nat || null : null);
+export const natEntriesOf = (nat, routerId) => (nat?.entries || []).filter(e => e.router === routerId);
+
 // ── Packet trace ──────────────────────────────────────────────────────────────
 // Walks an IPv4 packet from srcId to dstIp one event at a time.
-// opts: { l4, app, label } annotate the frames; arpCache (Set of "dev|ip") skips ARP for known next hops
+// opts: { flow:{proto, sport, dport, extra}, app, label } describe the packet;
+//       arpCache (Set of "dev|ip") skips ARP for known next hops; nat (state from emptyNat) is updated in place.
 export function trace(topo, srcId, dstIpStr, opts = {}) {
   const steps = [];
   // What devices learn along the way: ARP entries, and switch MAC table entries
   const learned = { arp:[], mac:[] };
+  const nat = opts.nat ?? emptyNat();
+  const src = deviceById(topo, srcId);
+  const flow = { ...(opts.flow ?? { proto:"ICMP", sport:100 + (src?.num ?? 0), dport:100 + (src?.num ?? 0), extra:"echo request" }) };
+  let dst = parseIp(dstIpStr);
   const fail = (at, title, detail, links = []) => {
     steps.push({ kind:"drop", at, title, detail, links });
-    return { ok:false, steps, reason:title, learned };
+    return { ok:false, steps, reason:title, learned, nat };
   };
-  const src = deviceById(topo, srcId);
-  const dst = parseIp(dstIpStr);
   if (!src) return fail(null, "Pick a source device");
   if (dst === null) return fail(srcId, "Destination is not a valid IP");
   const srcAddr = portAddr(src, 0);
   if (src.type !== "pc" || !srcAddr) return fail(srcId, `${src.name} has no valid IP address`, "Give the PC an address such as 192.168.1.10/24.");
   if (deviceIps(src).includes(dst)) {
     steps.push({ kind:"deliver", at:srcId, title:"Destination is this PC itself", detail:"Loopback — the packet never leaves the NIC.", links:[] });
-    return { ok:true, steps, learned };
+    return { ok:true, steps, learned, nat, final:{ srcIp:srcAddr.ip, ...flow } };
   }
 
+  let srcIp = srcAddr.ip;
+  const sock = (ip, port) => (flow.proto === "ICMP" ? `${numToIp(ip)} (id ${port})` : `${numToIp(ip)}:${port}`);
+  const l4Text = () => (flow.proto === "ICMP"
+    ? `ICMP ${flow.extra || "echo"} · id ${flow.sport}`
+    : `${flow.proto} ${flow.sport} → ${flow.dport}${flow.extra ? ` ${flow.extra}` : ""}`);
+
   let cur = src;
+  let ingress = null;
   let ttl = 64;
   for (let guard = 0; guard < 80; guard++) {
     // 1. Decide the next hop and egress interface
@@ -591,6 +606,32 @@ export function trace(topo, srcId, dstIpStr, opts = {}) {
           : route.type === "O"
             ? `Longest match is a link-state route (cost ${route.metric}) computed by Dijkstra; next hop ${numToIp(route.via)} on ${route.iface}. TTL ${ttl + 1} → ${ttl}.`
             : `Longest match is a static route via ${numToIp(route.via)} on ${route.iface}. TTL ${ttl + 1} → ${ttl}.`) + sub });
+
+      // Outbound NAT: inside interface → outside interface, rewrite the source address and port
+      if (ingress && route.tag === null && ingress.tag === null
+          && natRole(cur, ingress.port) === "inside" && natRole(cur, route.port) === "outside") {
+        const pub = interfaces(cur).find(f => f.port === route.port && f.tag === null);
+        if (pub) {
+          let entry = nat.entries.find(e => e.router === cur.id && e.proto === flow.proto && e.insideIp === srcIp && e.insidePort === flow.sport);
+          const fresh = !entry;
+          if (fresh) {
+            const port = nat.next[cur.id] ?? 5001;
+            nat.next[cur.id] = port + 1;
+            entry = { router:cur.id, proto:flow.proto, insideIp:srcIp, insidePort:flow.sport,
+              outsideIp:pub.a.ip, outsidePort:port, remoteIp:dst, remotePort:flow.dport };
+            nat.entries.push(entry);
+          }
+          steps.push({ kind:"nat", at:cur.id, links:[], ttl,
+            title:`${cur.name} NAT: source ${sock(srcIp, flow.sport)} → ${sock(entry.outsideIp, entry.outsidePort)}`,
+            detail:(fresh
+              ? `New entry in ${cur.name}'s NAT translation table. ${numToIp(srcIp)} is a private address the Internet can't route back to, so ${cur.name} swaps in its own public address ${numToIp(entry.outsideIp)} and a fresh port ${entry.outsidePort}.`
+              : `${cur.name} already has a NAT entry for this connection, so it reuses public port ${entry.outsidePort}.`)
+              + " The IP and TCP/UDP checksums are recalculated." });
+          srcIp = entry.outsideIp;
+          flow.sport = entry.outsidePort;
+          if (flow.proto === "ICMP") flow.dport = flow.sport;
+        }
+      }
     }
 
     // 2. ARP for the next hop on the egress segment (only within the egress VLAN)
@@ -622,7 +663,7 @@ export function trace(topo, srcId, dstIpStr, opts = {}) {
     const tdev = deviceById(topo, target.dev);
     const tIface = ifaceAt(tdev, target.port, target.tag);
     const dstMac = macOf(tdev, target.port);
-    const egressIp = cur.type === "pc" ? srcAddr.ip : interfaces(cur).find(f => f.port === egress.port && f.tag === egress.tag)?.a.ip;
+    const egressIp = interfaces(cur).find(f => f.port === egress.port && f.tag === egress.tag)?.a.ip;
     learned.arp.push({ dev:cur.id, ip:numToIp(nh), mac:dstMac, iface:egress.name, host:`${tdev.name} ${tIface.name}` });
     if (egressIp !== undefined) learned.arp.push({ dev:tdev.id, ip:numToIp(egressIp), mac:srcMac, iface:tIface.name, host:`${cur.name} ${egress.name}` });
     // The unicast ARP reply teaches the switches on the path where the target lives
@@ -633,8 +674,8 @@ export function trace(topo, srcId, dstIpStr, opts = {}) {
     }
 
     // 3. Frame crosses the segment, switch by switch
-    const base = { srcMac, dstMac, srcIp:numToIp(srcAddr.ip), dstIp:numToIp(dst), ttl,
-      ...(opts.l4 ? { l4:opts.l4 } : {}), ...(opts.app ? { app:opts.app } : {}) };
+    const base = { srcMac, dstMac, srcIp:numToIp(srcIp), dstIp:numToIp(dst), ttl, l4:l4Text(),
+      ...(opts.app ? { app:opts.app } : {}) };
     steps.push({ kind:"send", at:cur.id, links:[], frame:{ ...base, tag:egress.tag },
       title:`${cur.name} sends ${opts.label ? `${opts.label} ` : "frame "}out ${egress.name}`,
       detail:`${cached ? `${numToIp(nh)}'s MAC is already in ${cur.name}'s ARP cache, so no ARP needed. ` : ""}New Ethernet header: ${srcMac} → ${dstMac}, ${tagText(egress.tag)}. IP addresses stay ${base.srcIp} → ${base.dstIp}.` });
@@ -650,14 +691,31 @@ export function trace(topo, srcId, dstIpStr, opts = {}) {
       title:`${tdev.name} receives frame on ${tIface.name}`,
       detail:`Destination MAC matches ${tdev.name}${target.tag !== null ? `, and tag ${target.tag} steers it to subinterface ${tIface.name}` : ""}, so it strips the Ethernet header and reads the IP packet.` });
 
-    // 4. Delivered, or forward again
+    // 4. Inbound NAT: traffic to a NAT router's public address on its outside interface
+    if (tdev.type === "router" && target.tag === null && natRole(tdev, target.port) === "outside" && tIface.a.ip === dst) {
+      const entry = nat.entries.find(e => e.router === tdev.id && e.proto === flow.proto && e.outsideIp === dst && e.outsidePort === flow.dport);
+      if (entry) {
+        steps.push({ kind:"nat", at:tdev.id, links:[],
+          title:`${tdev.name} NAT: destination ${sock(dst, flow.dport)} → ${sock(entry.insideIp, entry.insidePort)}`,
+          detail:`The NAT table says public port ${entry.outsidePort} belongs to ${numToIp(entry.insideIp)}, so ${tdev.name} rewrites the destination and forwards it inside.` });
+        dst = entry.insideIp;
+        flow.dport = entry.insidePort;
+        if (flow.proto === "ICMP") flow.sport = flow.dport;
+      } else if (flow.proto !== "ICMP") {
+        return fail(tdev.id, `${tdev.name} NAT: no entry for ${flow.proto} port ${flow.dport} — dropped`,
+          `Nothing inside started a connection that uses public port ${flow.dport}, so ${tdev.name} has no idea which inside host it's for. This is why hosts behind NAT can't accept unsolicited incoming connections (unless a port forward is configured).`);
+      }
+    }
+
+    // 5. Delivered, or forward again
     if (deviceIps(tdev).includes(dst)) {
       steps.push({ kind:"deliver", at:tdev.id, links:[], title:opts.label ? `${opts.label} reaches ${tdev.name}` : `Delivered to ${tdev.name}`,
         detail:`${numToIp(dst)} belongs to ${tdev.name}. The packet crossed ${steps.filter(s => s.kind === "route" && deviceById(topo, s.at)?.type === "router").length} router(s); final TTL ${ttl}.` });
-      return { ok:true, steps, learned, ttl };
+      return { ok:true, steps, learned, ttl, nat, final:{ srcIp, ...flow } };
     }
     if (tdev.type !== "router") return fail(tdev.id, `${tdev.name} is not a router — packet dropped`, "End hosts don't forward packets for others.");
     cur = tdev;
+    ingress = { port:target.port, tag:target.tag };
   }
   return fail(cur.id, "Gave up after too many hops", "This looks like a routing loop.");
 }
@@ -681,7 +739,7 @@ export function parseUrl(s) {
 
 // Opens a URL from a PC: DHCP → (ARP) → DNS → TCP handshake → HTTP, as in Kurose & Ross §6.7.
 // `base` is the configured topology (for DHCP); `live` has leases applied.
-export function webRequest(base, live, leases, pcId, urlStr) {
+export function webRequest(base, live, leases, pcId, urlStr, nat = emptyNat()) {
   const steps = [], stages = [];
   const learned = { arp:[], mac:[] };
   const arpCache = new Set();
@@ -690,12 +748,16 @@ export function webRequest(base, live, leases, pcId, urlStr) {
     learned.arp.push(...run.learned.arp);
     learned.mac.push(...run.learned.mac);
     run.learned.arp.forEach(e => arpCache.add(`${e.dev}|${e.ip}`));
-    return run.ok;
+    return run;
   };
+  const send = (stage, from, toIp, flow, extra = {}) => absorb(trace(live, from, toIp, { ...extra, flow, arpCache, nat }), stage);
+  // Answer a packet at the address and port the server actually saw (after any NAT)
+  const reply = (stage, from, got, extra = {}, flowExtra) => send(stage, from, numToIp(got.final.srcIp),
+    { proto:got.final.proto, sport:got.final.dport, dport:got.final.sport, ...(flowExtra ? { extra:flowExtra } : {}) }, extra);
   const note = (stage, at, title, detail = "", kind = "route") => steps.push({ kind, at, links:[], title, detail, stage });
   const finish = (ok, reason, failed) => {
     if (failed) stages.push({ name:failed, ok:false });
-    return { ok, steps, learned, stages, reason };
+    return { ok, steps, learned, stages, reason, nat };
   };
 
   const pc = deviceById(live, pcId);
@@ -726,9 +788,9 @@ export function webRequest(base, live, leases, pcId, urlStr) {
         `To turn ${url.host} into an IP address the PC must ask a DNS server. Set one in the DHCP pool (or the PC's static settings).`, "drop");
       return finish(false, "No DNS server configured", "DNS");
     }
-    const sport = 50000 + pc.num;
-    if (!absorb(trace(live, pcId, numToIp(dnsIp), { l4:`UDP ${sport} → 53`, app:`DNS query: A record for ${url.host}?`, label:"DNS query", arpCache }), "DNS"))
-      return finish(false, "DNS query didn't reach the server", "DNS");
+    const query = send("DNS", pcId, numToIp(dnsIp), { proto:"UDP", sport:50000 + pc.num, dport:53 },
+      { app:`DNS query: A record for ${url.host}?`, label:"DNS query" });
+    if (!query.ok) return finish(false, "DNS query didn't reach the server", "DNS");
     const dnsDev = live.devices.find(d => deviceIps(d).includes(dnsIp));
     if (!dnsDev?.services?.dns) {
       note("DNS", dnsDev.id, `${dnsDev.name} isn't running a DNS server`,
@@ -739,10 +801,10 @@ export function webRequest(base, live, leases, pcId, urlStr) {
     note("DNS", dnsDev.id,
       serverIp === null ? `${dnsDev.name} has no record for ${url.host}` : `${dnsDev.name} looks up ${url.host} → ${numToIp(serverIp)}`,
       serverIp === null ? "The name isn't in this server's records, so it answers NXDOMAIN (non-existent domain)." : "It finds an A record and sends the answer back over UDP.");
-    if (dnsDev.type !== "pc" || !absorb(trace(live, dnsDev.id, myIp, {
-      l4:`UDP 53 → ${sport}`, label:"DNS response", arpCache,
+    if (dnsDev.type !== "pc" || !reply("DNS", dnsDev.id, query, {
+      label:"DNS response",
       app: serverIp === null ? `DNS response: NXDOMAIN (${url.host})` : `DNS response: ${url.host} A ${numToIp(serverIp)}`,
-    }), "DNS")) return finish(false, "DNS response didn't make it back", "DNS");
+    }).ok) return finish(false, "DNS response didn't make it back", "DNS");
     if (serverIp === null) {
       note("DNS", pcId, `Name not found: ${url.host}`, "The browser shows “server not found”. No TCP connection is attempted.", "drop");
       return finish(false, `NXDOMAIN for ${url.host}`, "DNS");
@@ -753,38 +815,40 @@ export function webRequest(base, live, leases, pcId, urlStr) {
   // 3. TCP three-way handshake to port 80
   const srv = numToIp(serverIp);
   const cport = 49152 + pc.num, cIsn = 1000 + pc.num * 100, sIsn = 5000;
-  if (!absorb(trace(live, pcId, srv, { l4:`TCP ${cport} → 80 [SYN] seq=${cIsn}`, label:"TCP SYN", arpCache }), "TCP"))
-    return finish(false, "TCP SYN didn't reach the server", "TCP");
+  const toServer = extra => ({ proto:"TCP", sport:cport, dport:80, extra });
+  const syn = send("TCP", pcId, srv, toServer(`[SYN] seq=${cIsn}`), { label:"TCP SYN" });
+  if (!syn.ok) return finish(false, "TCP SYN didn't reach the server", "TCP");
   const web = live.devices.find(d => deviceIps(d).includes(serverIp));
   if (!web?.services?.web) {
     note("TCP", web.id, `${web.name} has no web server on port 80`,
       "Nothing is listening on TCP port 80, so the host refuses the connection with a RST segment.", "drop");
-    if (web.type === "pc") absorb(trace(live, web.id, myIp, { l4:`TCP 80 → ${cport} [RST, ACK] seq=0 ack=${cIsn + 1}`, label:"TCP RST", arpCache }), "TCP");
+    if (web.type === "pc") reply("TCP", web.id, syn, { label:"TCP RST" }, `[RST, ACK] seq=0 ack=${cIsn + 1}`);
     note("TCP", pcId, "Connection refused", "The browser reports that the site refused to connect.", "drop");
     return finish(false, "Connection refused — no web server on port 80", "TCP");
   }
-  if (!absorb(trace(live, web.id, myIp, { l4:`TCP 80 → ${cport} [SYN, ACK] seq=${sIsn} ack=${cIsn + 1}`, label:"TCP SYN-ACK", arpCache }), "TCP"))
+  if (!reply("TCP", web.id, syn, { label:"TCP SYN-ACK" }, `[SYN, ACK] seq=${sIsn} ack=${cIsn + 1}`).ok)
     return finish(false, "TCP SYN-ACK didn't make it back", "TCP");
-  if (!absorb(trace(live, pcId, srv, { l4:`TCP ${cport} → 80 [ACK] seq=${cIsn + 1} ack=${sIsn + 1}`, label:"TCP ACK", arpCache }), "TCP"))
+  if (!send("TCP", pcId, srv, toServer(`[ACK] seq=${cIsn + 1} ack=${sIsn + 1}`), { label:"TCP ACK" }).ok)
     return finish(false, "TCP ACK didn't reach the server", "TCP");
+  const seen = syn.final;
+  const natNote = seen.srcIp !== mine.ip
+    ? ` Because of NAT, ${web.name} thinks it is talking to ${numToIp(seen.srcIp)}:${seen.sport}, not ${myIp}:${cport}.` : "";
   note("TCP", pcId, "TCP connection established",
-    `Three-way handshake done: client port ${cport} ↔ server port 80, starting sequence numbers ${cIsn} (client) and ${sIsn} (server).`, "deliver");
+    `Three-way handshake done: client port ${cport} ↔ server port 80, starting sequence numbers ${cIsn} (client) and ${sIsn} (server).${natNote}`, "deliver");
   stages.push({ name:"TCP", ok:true });
 
   // 4. HTTP request and response
   const get = `GET ${url.path} HTTP/1.1 · Host: ${url.host}`;
   const getLen = get.length + 60;
-  if (!absorb(trace(live, pcId, srv, { l4:`TCP ${cport} → 80 [PSH, ACK] seq=${cIsn + 1} ack=${sIsn + 1} len=${getLen}`, app:`HTTP ${get}`, label:"HTTP GET", arpCache }), "HTTP"))
-    return finish(false, "HTTP request didn't reach the server", "HTTP");
+  const req = send("HTTP", pcId, srv, toServer(`[PSH, ACK] seq=${cIsn + 1} ack=${sIsn + 1} len=${getLen}`), { app:`HTTP ${get}`, label:"HTTP GET" });
+  if (!req.ok) return finish(false, "HTTP request didn't reach the server", "HTTP");
   const title = String(web.services.web.title || "").trim() || "Welcome";
-  if (!absorb(trace(live, web.id, myIp, {
-    l4:`TCP 80 → ${cport} [PSH, ACK] seq=${sIsn + 1} ack=${cIsn + 1 + getLen} len=512`,
-    app:`HTTP/1.1 200 OK · <title>${title}</title>`, label:"HTTP 200 OK", arpCache,
-  }), "HTTP")) return finish(false, "HTTP response didn't make it back", "HTTP");
+  if (!reply("HTTP", web.id, req, { app:`HTTP/1.1 200 OK · <title>${title}</title>`, label:"HTTP 200 OK" },
+    `[PSH, ACK] seq=${sIsn + 1} ack=${cIsn + 1 + getLen} len=512`).ok) return finish(false, "HTTP response didn't make it back", "HTTP");
   note("HTTP", pcId, `Page loaded: “${title}”`,
     `${pc.name}'s browser renders the page from ${web.name} (${srv}). DHCP, ARP, DNS, TCP and HTTP all had to work for this to happen.`, "deliver");
   stages.push({ name:"HTTP", ok:true });
-  return { ok:true, steps, learned, stages, title, serverIp:srv };
+  return { ok:true, steps, learned, stages, title, serverIp:srv, nat };
 }
 
 // ── Learned state (ARP caches, switch MAC tables) ─────────────────────────────
@@ -857,6 +921,12 @@ export function problems(topo) {
       add("warn", d.id, `${d.name} got no DHCP lease and fell back to APIPA ${numToIp(d.lease.ip)}: ${d.lease.error}`);
     }
     if (d.type === "router") {
+      const roles = d.ports.map((p, i) => natRole(d, i));
+      roles.forEach((role, i) => {
+        if (role && !portAddr(d, i)) add("warn", d.id, `${d.name} ${portName("router", i)} is NAT ${role} but has no IP address`);
+      });
+      if (roles.includes("inside") && !roles.includes("outside")) add("warn", d.id, `${d.name} has NAT inside interfaces but no outside interface, so nothing gets translated`);
+      if (roles.includes("outside") && !roles.includes("inside")) add("warn", d.id, `${d.name} has a NAT outside interface but no inside interface, so nothing gets translated`);
       interfaces(d).forEach(f => {
         const cfg = poolConfig(d, f);
         const pool = parsePool(cfg, f);
@@ -954,6 +1024,7 @@ function build(spec) {
       d.ports[i].subs = subs.map(([vlan, addr, pool]) => ({ vlan:String(vlan), addr, ...(pool ? { dhcp:poolOf(pool) } : {}) }));
     });
     Object.entries(cfg.pools || {}).forEach(([i, pool]) => { d.ports[i].dhcp = poolOf(pool); });
+    Object.entries(cfg.nat || {}).forEach(([i, role]) => { d.ports[i].nat = role; });
     Object.entries(cfg.sw || {}).forEach(([i, p]) => { Object.assign(d.ports[i], p); });
     topo.devices.push(d);
   }
@@ -1033,6 +1104,27 @@ const DHCP_CAMPUS = vlan20Pool => {
   return spec;
 };
 
+// Kurose & Ross's NAT figure: home network 10.0.0/24 behind one public address, 138.76.29.7
+const NAT_HOME = natOn => ({
+  devices: [
+    ["pc", 1, 80, 110, { addrs:["10.0.0.1/24"], gw:"10.0.0.4", dns:"128.119.40.53" }],
+    ["pc", 2, 80, 230, { addrs:["10.0.0.2/24"], gw:"10.0.0.4", dns:"128.119.40.53" }],
+    ["pc", 3, 80, 350, { addrs:["10.0.0.3/24"], gw:"10.0.0.4", dns:"128.119.40.53" }],
+    ["switch", 1, 220, 230],
+    ["router", 1, 380, 230, { name:"Home", addrs:["10.0.0.4/24", "138.76.29.7/24"], routes:[["0.0.0.0/0", "138.76.29.1"]],
+      ...(natOn ? { nat:{ 0:"inside", 1:"outside" } } : {}) }],
+    ["router", 2, 580, 230, { name:"ISP", addrs:["138.76.29.1/24", "128.119.40.1/24"] }],
+    ["switch", 2, 740, 230],
+    ["pc", 4, 900, 130, { name:"DNS", addrs:["128.119.40.53/24"], gw:"128.119.40.1",
+      services:{ dns:{ records:[{ name:"gaia.cs.umass.edu", ip:"128.119.40.186" }, { name:"www.cs204.edu", ip:"128.119.40.186" }] } } }],
+    ["pc", 5, 900, 330, { name:"gaia", addrs:["128.119.40.186/24"], gw:"128.119.40.1", services:{ web:{ title:"gaia.cs.umass.edu" } } }],
+  ],
+  links: [
+    ["pc1", 0, "switch1", 0], ["pc2", 0, "switch1", 1], ["pc3", 0, "switch1", 2], ["switch1", 7, "router1", 0],
+    ["router1", 1, "router2", 0], ["router2", 1, "switch2", 7], ["switch2", 0, "pc4", 0], ["switch2", 1, "pc5", 0],
+  ],
+});
+
 const DAY_IN_LIFE = webRecordIp => ({
   devices: [
     ["pc", 1, 90, 230, { name:"Laptop", dhcp:true }],
@@ -1056,6 +1148,10 @@ export const PRESETS = [
     build: () => build(DAY_IN_LIFE("10.0.3.80")) },
   { id:"webpuzzle", name:"Puzzle: the page won't load", hint:"The Laptop gets an address and DNS answers, but www.cs204.edu still won't load. Follow the trace to find out why.",
     build: () => build(DAY_IN_LIFE("10.0.3.81")) },
+  { id:"nat", name:"NAT: home network (lecture figure)", hint:"Three hosts on 10.0.0.0/24 share one public address, 138.76.29.7. Open gaia.cs.umass.edu from PC1 and watch the Home router rewrite addresses and ports; the NAT table is in Device tables.",
+    build: () => build(NAT_HOME(true)) },
+  { id:"natpuzzle", name:"Puzzle: requests leave, replies never return", hint:"PC1's packets reach the ISP, but nothing ever comes back. The ISP has no route to 10.0.0.0/8 — and shouldn't. What's missing on the Home router?",
+    build: () => build(NAT_HOME(false)) },
   { id:"dijkstra", name:"Routing: Dijkstra example (lecture)", hint:"The u–z network from the Dijkstra slides. Open the Routing algorithms tab and pick u as the source.",
     build: () => build(routerLab({
       routers: [["u", 150, 230], ["v", 340, 110], ["x", 340, 350], ["w", 560, 110], ["y", 560, 350], ["z", 760, 230]],
