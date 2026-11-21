@@ -4,6 +4,7 @@ import {
   portName, portLabel, portAddr, parseAddr, parseIp, macOf, routingTable, problems,
   trace, deviceIps, numToIp, interfaces, switchPort, parseAllowed, validVlan,
   linkIsTrunk, accessVlanOf, usesVlans, NATIVE_VLAN,
+  emptyTables, mergeLearned, arpTableOf, macTableOf,
 } from "./topoEngine.js";
 import "./topology.css";
 
@@ -50,6 +51,9 @@ export default function TopologyBuilder() {
   const [view, setView]       = useState("fwd");
   const [si, setSi]           = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [pings, setPings]     = useState([]);
+  const [tables, setTables]   = useState(emptyTables);
+  const [panel, setPanel]     = useState("log");
   const svgRef  = useRef(null);
   const drag    = useRef(null);
   const listRef = useRef(null);
@@ -90,6 +94,7 @@ export default function TopologyBuilder() {
     setTopo(t => { const c = structuredClone(t); fn(c); return c; });
     setResult(null);
     setPlaying(false);
+    setTables(emptyTables());
   }
 
   function addDevice(type) {
@@ -132,7 +137,7 @@ export default function TopologyBuilder() {
       if (pending === d.id) { setPending(null); setMsg(""); return; }
       const next = structuredClone(topo);
       const res = connect(next, pending, d.id);
-      if (!res.error) { setTopo(next); setResult(null); setPlaying(false); }
+      if (!res.error) { setTopo(next); setResult(null); setPlaying(false); setTables(emptyTables()); }
       const a = deviceById(topo, pending);
       setMsg(res.error ? res.error : `Cabled ${a?.name} ↔ ${d.name}. Click another pair, or press Esc.`);
       setPending(null);
@@ -153,12 +158,27 @@ export default function TopologyBuilder() {
     setTopo(t => ({ ...t, devices: t.devices.map(d => d.id === id ? { ...d, x, y } : d) }));
   }
 
-  function runTrace() {
-    const fwd = trace(topo, srcId, dstIp);
-    const owner = topo.devices.find(d => deviceIps(d).map(numToIp).includes(dstIp));
-    const srcAddr = portAddr(deviceById(topo, srcId), 0);
-    const rev = fwd.ok && owner?.type === "pc" && owner.id !== srcId && srcAddr
+  function runTrace(fromId = srcId, toIp = dstIp) {
+    const srcDev = deviceById(topo, fromId);
+    if (!srcDev || !toIp) return;
+    const fwd = trace(topo, fromId, toIp);
+    const owner = topo.devices.find(d => deviceIps(d).map(numToIp).includes(toIp));
+    const srcAddr = portAddr(srcDev, 0);
+    const rev = fwd.ok && owner?.type === "pc" && owner.id !== fromId && srcAddr
       ? trace(topo, owner.id, numToIp(srcAddr.ip)) : null;
+    const n = (pings[0]?.n || 0) + 1;
+    setTables(t => mergeLearned(mergeLearned(t, fwd.learned, n), rev?.learned, n));
+    setPings(p => [{
+      n, time: new Date().toLocaleTimeString([], { hour:"2-digit", minute:"2-digit", second:"2-digit" }),
+      srcId: fromId, dstIp: toIp,
+      from: `${srcDev.name} (${srcAddr ? numToIp(srcAddr.ip) : "no IP"})`,
+      to: targets.find(t => t.ip === toIp)?.label || toIp,
+      fwdOk: fwd.ok, revOk: rev ? rev.ok : null,
+      routers: fwd.steps.filter(s => s.kind === "route" && deviceById(topo, s.at)?.type === "router").length,
+      ttl: fwd.ttl ?? null,
+      reason: !fwd.ok ? fwd.reason : rev && !rev.ok ? `Reply: ${rev.reason}` : "",
+    }, ...p].slice(0, 50));
+    setSrc(fromId); setDst(toIp);
     setResult({ fwd, rev });
     setView("fwd"); setSi(0); setPlaying(true);
   }
@@ -169,6 +189,7 @@ export default function TopologyBuilder() {
     const p = PRESETS.find(x => x.id === id);
     setTopo(p.build());
     setSel(null); setResult(null); setPending(null); setPlaying(false); setSrc(""); setDst("");
+    setPings([]); setTables(emptyTables());
     setMsg(p.hint);
   }
 
@@ -200,6 +221,7 @@ export default function TopologyBuilder() {
       {msg && <div className="tb-msg">{msg}</div>}
 
       <div className="tb-body">
+        <div className="tb-left">
         <div className="tb-canvas-wrap">
           <svg ref={svgRef} viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} className={`tb-canvas tb-tool-${tool}`}
             onPointerMove={onMove} onPointerUp={() => { drag.current = null; }}
@@ -295,6 +317,26 @@ export default function TopologyBuilder() {
           <p className="tb-hint">Drag to move · Connect mode to cable devices · Click a device or cable to edit · Delete key removes the selection</p>
         </div>
 
+        <div className="tb-card tb-panel">
+          <div className="tb-tabs" role="tablist">
+            <button role="tab" aria-selected={panel === "log"} className={panel === "log" ? "on" : ""} onClick={() => setPanel("log")}>
+              Ping log{pings.length ? ` (${pings.length})` : ""}
+            </button>
+            <button role="tab" aria-selected={panel === "hops"} className={panel === "hops" ? "on" : ""} onClick={() => setPanel("hops")}>
+              Hop-by-hop
+            </button>
+            <button role="tab" aria-selected={panel === "tables"} className={panel === "tables" ? "on" : ""} onClick={() => setPanel("tables")}>
+              Device tables
+            </button>
+          </div>
+          {panel === "log" && <PingLog pings={pings} onReplay={p => runTrace(p.srcId, p.dstIp)} onClear={() => setPings([])}/>}
+          {panel === "hops" && <HopTable topo={topo} run={run} view={view} si={si}
+            onPick={i => { setPlaying(false); setSi(i); }}/>}
+          {panel === "tables" && <DeviceTables topo={topo} tables={tables}
+            onPick={id => setSel({ kind:"dev", id })} onClear={() => setTables(emptyTables())}/>}
+        </div>
+        </div>
+
         <aside className="tb-side">
           {issues.length > 0 && (
             <details className="tb-card tb-issues" open={issues.some(i => i.level === "error")}>
@@ -324,7 +366,7 @@ export default function TopologyBuilder() {
                 {targets.map(t => <option key={t.label} value={t.ip}>{t.label}</option>)}
               </select>
             </label>
-            <button className="tb-run" disabled={!srcId || !dstIp} onClick={runTrace}>▶ Trace packet</button>
+            <button className="tb-run" disabled={!srcId || !dstIp} onClick={() => runTrace()}>▶ Send ping</button>
 
             {result && (
               <>
@@ -516,6 +558,168 @@ function Inspector({ d, topo, edit }) {
         </table>
       </>}
     </div>
+  );
+}
+
+const tagLabel = f => (f.tag !== null && f.tag !== undefined ? `tag ${f.tag}` : f.vlan ? `untagged (VLAN ${f.vlan})` : "untagged");
+
+function PingLog({ pings, onReplay, onClear }) {
+  if (!pings.length) return <p className="tb-note">No pings yet. Pick a source and destination and press “Send ping” — every ping is recorded here.</p>;
+  return (
+    <>
+      <div className="tb-tablewrap">
+        <table className="tb-grid">
+          <thead>
+            <tr><th>#</th><th>Time</th><th>From</th><th>To</th><th>Request</th><th>Reply</th><th>Routers</th><th>TTL</th><th>What happened</th></tr>
+          </thead>
+          <tbody>
+            {pings.map(p => (
+              <tr key={p.n} className="tb-click" onClick={() => onReplay(p)} title="Click to send this ping again">
+                <td>{p.n}</td>
+                <td className="mono">{p.time}</td>
+                <td>{p.from}</td>
+                <td>{p.to}</td>
+                <td className={p.fwdOk ? "ok" : "bad"}>{p.fwdOk ? "✓ arrived" : "✗ dropped"}</td>
+                <td className={p.revOk === null ? "" : p.revOk ? "ok" : "bad"}>{p.revOk === null ? "—" : p.revOk ? "✓ arrived" : "✗ dropped"}</td>
+                <td>{p.fwdOk ? p.routers : "—"}</td>
+                <td>{p.ttl ?? "—"}</td>
+                <td className={p.reason ? "bad" : ""}>{p.reason || (p.revOk ? "Delivered both ways" : "Delivered")}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="tb-panelbar">
+        <span>Click a row to send that ping again.</span>
+        <button onClick={onClear}>Clear log</button>
+      </div>
+    </>
+  );
+}
+
+function HopTable({ topo, run, view, si, onPick }) {
+  if (!run) return <p className="tb-note">Send a ping to see every step it takes: which device handled it and the MAC, IP, VLAN and TTL values at that point.</p>;
+  const prevFrames = run.steps.map((_, i) => run.steps.slice(0, i).findLast(s => s.frame)?.frame ?? null);
+  return (
+    <>
+      <p className="tb-note">
+        {view === "fwd" ? "Request" : "Reply"} · {run.ok ? "delivered" : "dropped"} · {run.steps.length} steps.
+        Highlighted cells changed since the previous frame — MAC addresses change at every router, IP addresses never do.
+      </p>
+      <div className="tb-tablewrap">
+        <table className="tb-grid">
+          <thead>
+            <tr><th>#</th><th>Device</th><th>What happened</th><th>Src MAC</th><th>Dst MAC</th><th>Src IP</th><th>Dst IP</th><th>802.1Q</th><th>TTL</th></tr>
+          </thead>
+          <tbody>
+            {run.steps.map((s, i) => {
+              const f = s.frame, prev = prevFrames[i];
+              const chg = k => (f && prev && (k === "tag" ? tagLabel(prev) !== tagLabel(f) : prev[k] !== f[k]) ? " chg" : "");
+              return (
+                <tr key={i} className={`tb-click${i === si ? " cur" : ""} k-${s.kind}`} onClick={() => onPick(i)}>
+                  <td>{i + 1}</td>
+                  <td>{deviceById(topo, s.at)?.name ?? "—"}</td>
+                  <td className="what">{KIND_ICON[s.kind]} {s.title}</td>
+                  <td className={`mono${chg("srcMac")}`}>{f?.srcMac ?? ""}</td>
+                  <td className={`mono${chg("dstMac")}`}>{f?.dstMac ?? ""}</td>
+                  <td className={`mono${chg("srcIp")}`}>{f?.srcIp ?? ""}</td>
+                  <td className={`mono${chg("dstIp")}`}>{f?.dstIp ?? ""}</td>
+                  <td className={chg("tag").trim()}>{f ? tagLabel(f) : ""}</td>
+                  <td className={chg("ttl").trim()}>{f?.ttl ?? s.ttl ?? ""}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+function MiniTable({ cols, rows, empty }) {
+  if (!rows.length) return <p className="tb-mini-empty">{empty}</p>;
+  return (
+    <table className="tb-mini">
+      <thead><tr>{cols.map(c => <th key={c}>{c}</th>)}</tr></thead>
+      <tbody>{rows.map((r, i) => <tr key={i} className={r.cls || ""}>{r.c.map((c, j) => <td key={j}>{c}</td>)}</tr>)}</tbody>
+    </table>
+  );
+}
+
+const TYPE_ORDER = { router:0, switch:1, pc:2 };
+
+function DeviceTables({ topo, tables, onPick, onClear }) {
+  const [filter, setFilter] = useState("infra");
+  const valid = filter === "infra" || filter === "all" || topo.devices.some(d => d.id === filter);
+  const f = valid ? filter : "infra";
+  const devs = topo.devices
+    .filter(d => f === "infra" ? d.type !== "pc" : f === "all" || d.id === f)
+    .sort((a, b) => TYPE_ORDER[a.type] - TYPE_ORDER[b.type] || a.name.localeCompare(b.name));
+  const all = [...Object.values(tables.arp), ...Object.values(tables.mac)];
+  const latest = Math.max(0, ...all.map(e => e.ping));
+  const fresh = e => (e.ping === latest ? "new" : "");
+  const EMPTY = "Empty — send a ping to fill it";
+
+  return (
+    <>
+      <div className="tb-panelbar">
+        <select value={f} onChange={e => setFilter(e.target.value)}>
+          <option value="infra">All routers &amp; switches</option>
+          <option value="all">Every device (incl. PCs)</option>
+          {topo.devices.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+        </select>
+        <span>{all.length
+          ? `${all.length} learned ${all.length === 1 ? "entry" : "entries"} · rows learned by the last ping are highlighted`
+          : "MAC and ARP tables start empty — devices learn them from the traffic they see."}</span>
+        <button onClick={onClear} disabled={!all.length}>Clear learned</button>
+      </div>
+      {!devs.length && <p className="tb-note">No devices to show.</p>}
+      <div className="tb-devgrid">
+        {devs.map(d => (
+          <div key={d.id} className="tb-devcard">
+            <button className="tb-devcard-title" style={{ color:TYPE_COLOR[d.type] }} onClick={() => onPick(d.id)}>
+              {d.type === "pc" ? "🖥" : d.type === "switch" ? "🔀" : "🧭"} {d.name}
+            </button>
+
+            {d.type === "router" && <>
+              <div className="tb-subtitle">Routing table</div>
+              <MiniTable cols={["", "Network", "Next hop", "Interface"]} empty="No routes — configure interfaces and cable them"
+                rows={routingTable(topo, d).map(r => ({
+                  c:[r.type, `${numToIp(r.net)}/${r.prefix}`, r.via === null ? "direct" : numToIp(r.via), r.iface ?? "unreachable"],
+                  cls: r.port === null ? "dead" : "",
+                }))}/>
+              <div className="tb-subtitle">ARP table</div>
+              <MiniTable cols={["IP", "MAC", "Interface", "Ping"]} empty={EMPTY}
+                rows={arpTableOf(tables, d.id).map(e => ({ c:[e.ip, e.mac, e.iface, `#${e.ping}`], cls:fresh(e) }))}/>
+            </>}
+
+            {d.type === "switch" && <>
+              <div className="tb-subtitle">MAC address table</div>
+              <MiniTable cols={["VLAN", "MAC", "Port", "Belongs to", "Ping"]} empty={EMPTY}
+                rows={macTableOf(tables, d.id).map(e => ({ c:[e.vlan, e.mac, portName("switch", e.port), e.host, `#${e.ping}`], cls:fresh(e) }))}/>
+              <div className="tb-subtitle">Ports in use</div>
+              <MiniTable cols={["Port", "Mode", "VLAN", "Connected to"]} empty="Nothing cabled"
+                rows={d.ports.map((p, i) => ({ p:switchPort(p), i })).filter(x => linkAt(topo, d.id, x.i)).map(({ p, i }) => ({
+                  c:[portName("switch", i), p.mode === "trunk" ? "trunk" : "access",
+                    p.mode === "trunk" ? (p.allowed.set ? [...p.allowed.set].join(",") : "all") : p.vlan,
+                    portLabel(topo, otherEnd(linkAt(topo, d.id, i), d.id, i))],
+                }))}/>
+            </>}
+
+            {d.type === "pc" && <>
+              <dl className="tb-facts">
+                <dt>IP</dt><dd>{d.ports[0].addr || "none"}</dd>
+                <dt>Gateway</dt><dd>{d.gw || "none"}</dd>
+                <dt>MAC</dt><dd>{macOf(d, 0)}</dd>
+              </dl>
+              <div className="tb-subtitle">ARP cache</div>
+              <MiniTable cols={["IP", "MAC", "Ping"]} empty={EMPTY}
+                rows={arpTableOf(tables, d.id).map(e => ({ c:[e.ip, e.mac, `#${e.ping}`], cls:fresh(e) }))}/>
+            </>}
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
 

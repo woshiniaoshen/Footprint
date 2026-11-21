@@ -155,6 +155,61 @@
 .tb-steplist li.future { opacity: 0.45; }
 .tb-steplist li.k-drop { color: #e63946; }
 
+/* ── Ping log / hop table / device tables ── */
+.tb-left { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.tb-panel { padding: 0 0 10px; overflow: hidden; }
+.tb-panel > .tb-note, .tb-panel > .tb-panelbar, .tb-panel > .tb-devgrid { margin-left: 14px; margin-right: 14px; }
+.tb-panel > .tb-note { margin-top: 10px; }
+.tb-tabs { display: flex; border-bottom: 1px solid var(--line); padding: 0 8px; }
+.tb-tabs button {
+  background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted);
+  font-size: 12px; font-weight: 600; padding: 10px 12px; cursor: pointer; font-family: inherit;
+}
+.tb-tabs button.on { color: var(--accent); border-bottom-color: var(--accent); }
+.tb-tablewrap { overflow: auto; max-height: 320px; margin: 10px 0 0; }
+.tb-grid { width: 100%; border-collapse: collapse; font-size: 11px; white-space: nowrap; }
+.tb-grid th {
+  position: sticky; top: 0; background: var(--panel); text-align: left; color: var(--quiet);
+  font-weight: 600; font-size: 10px; padding: 6px 8px; border-bottom: 1px solid var(--line);
+}
+.tb-grid td { padding: 5px 6px; border-bottom: 1px solid rgba(255,255,255,0.03); color: var(--text); }
+.tb-grid th { padding-left: 6px; padding-right: 6px; }
+.tb-grid th:first-child, .tb-grid td:first-child { padding-left: 14px; }
+.tb-grid .mono { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; }
+.tb-grid td.what { white-space: normal; min-width: 170px; max-width: 240px; line-height: 1.35; }
+.tb-grid .mono { font-size: 10px; }
+.tb-grid td.ok  { color: #42d9b8; }
+.tb-grid td.bad { color: #f8a5ac; }
+.tb-grid td.chg { background: rgba(242,195,107,0.12); color: #f2c36b; }
+.tb-grid tr.cur td { background: rgba(66,217,184,0.1); }
+.tb-grid tr.k-drop td { color: #f8a5ac; }
+.tb-click { cursor: pointer; }
+.tb-click:hover td { background: rgba(255,255,255,0.03); }
+.tb-panelbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; font-size: 11px; color: var(--quiet); }
+.tb-panelbar span { flex: 1; min-width: 180px; }
+.tb-panelbar select {
+  background: rgba(0,0,0,0.3); border: 1px solid var(--line); color: var(--text);
+  border-radius: 7px; padding: 6px 8px; font-size: 12px; font-family: inherit; outline: none;
+}
+.tb-panelbar select option { background: #111827; }
+.tb-panelbar button {
+  background: rgba(255,255,255,0.04); border: 1px solid var(--line); color: var(--muted);
+  border-radius: 7px; padding: 5px 10px; font-size: 11px; cursor: pointer; font-family: inherit;
+}
+.tb-panelbar button:disabled { opacity: 0.4; cursor: default; }
+
+.tb-devgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; margin-top: 10px; }
+.tb-devcard { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: rgba(0,0,0,0.15); min-width: 0; }
+.tb-devcard .tb-subtitle:first-of-type { margin-top: 6px; }
+.tb-devcard-title { background: none; border: none; font-size: 13px; font-weight: 700; cursor: pointer; padding: 0; font-family: inherit; }
+.tb-devcard-title:hover { text-decoration: underline; }
+.tb-mini { width: 100%; border-collapse: collapse; font-size: 10.5px; font-family: 'JetBrains Mono', monospace; }
+.tb-mini th { text-align: left; color: var(--quiet); font-weight: 600; padding: 3px 4px; border-bottom: 1px solid var(--line); font-family: Inter, sans-serif; font-size: 10px; }
+.tb-mini td { padding: 3px 4px; color: var(--text); white-space: nowrap; }
+.tb-mini tr.new td { background: rgba(66,217,184,0.1); }
+.tb-mini tr.dead td { color: #f8a5ac; }
+.tb-mini-empty { font-size: 10.5px; color: var(--quiet); font-style: italic; padding: 4px 0; }
+
 /* ── Mode tabs in the explorer header ── */
 .osi-modes { display: flex; background: rgba(0,0,0,0.3); border: 1px solid var(--line); border-radius: 9px; padding: 3px; }
 .osi-mode {

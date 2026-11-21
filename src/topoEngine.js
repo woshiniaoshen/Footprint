@@ -190,8 +190,8 @@ export function usesVlans(topo) {
 // Where a frame sent out (dev, port) with 802.1Q tag `tag` (null = untagged) can reach.
 export function segment(topo, devId, port, tag = null) {
   const start = linkAt(topo, devId, port);
-  if (!start) return { endpoints:[], drops:[], loop:false, unplugged:true };
-  const endpoints = [], drops = [];
+  if (!start) return { endpoints:[], drops:[], entered:[], loop:false, unplugged:true };
+  const endpoints = [], drops = [], entered = [];
   const seen = new Set();
   let loop = false;
   const queue = [{ end: otherEnd(start, devId, port), tag, links:[start.id], hops:[] }];
@@ -216,6 +216,7 @@ export function segment(topo, devId, port, tag = null) {
     const key = `${d.id}:${vlan}`;
     if (seen.has(key)) { loop = true; continue; }
     seen.add(key);
+    entered.push({ sw:d.id, port:end.port, vlan });
     for (let p = 0; p < d.ports.length; p++) {
       if (p === end.port) continue;
       const l = linkAt(topo, d.id, p);
@@ -234,7 +235,7 @@ export function segment(topo, devId, port, tag = null) {
         hops:[...hops, { sw:d.id, inPort:end.port, outPort:p, vlan, tagIn:inTag, tagOut:outTag, inMode:ip.mode, outMode:op.mode }] });
     }
   }
-  return { endpoints, drops, loop, unplugged:false };
+  return { endpoints, drops, entered, loop, unplugged:false };
 }
 
 // ── Routing ───────────────────────────────────────────────────────────────────
@@ -265,9 +266,11 @@ const tagText = t => (t === null ? "untagged" : `802.1Q tag ${t}`);
 // Walks an IPv4 packet from srcId to dstIp one event at a time.
 export function trace(topo, srcId, dstIpStr) {
   const steps = [];
+  // What devices learn along the way: ARP entries, and switch MAC table entries
+  const learned = { arp:[], mac:[] };
   const fail = (at, title, detail, links = []) => {
     steps.push({ kind:"drop", at, title, detail, links });
-    return { ok:false, steps, reason:title };
+    return { ok:false, steps, reason:title, learned };
   };
   const src = deviceById(topo, srcId);
   const dst = parseIp(dstIpStr);
@@ -277,7 +280,7 @@ export function trace(topo, srcId, dstIpStr) {
   if (src.type !== "pc" || !srcAddr) return fail(srcId, `${src.name} has no valid IP address`, "Give the PC an address such as 192.168.1.10/24.");
   if (deviceIps(src).includes(dst)) {
     steps.push({ kind:"deliver", at:srcId, title:"Destination is this PC itself", detail:"Loopback — the packet never leaves the NIC.", links:[] });
-    return { ok:true, steps };
+    return { ok:true, steps, learned };
   }
 
   let cur = src;
@@ -318,6 +321,9 @@ export function trace(topo, srcId, dstIpStr) {
     const seg = segment(topo, cur.id, egress.port, egress.tag);
     if (seg.unplugged) return fail(cur.id, `${cur.name} ${portName(cur.type, egress.port)} has no cable`, "The egress port is not connected to anything.");
     const target = seg.endpoints.find(e => ifaceAt(deviceById(topo, e.dev), e.port, e.tag)?.a.ip === nh);
+    const srcMac = macOf(cur, egress.port);
+    // The ARP request floods the whole VLAN, so every switch it enters learns the sender's MAC
+    for (const e of seg.entered) learned.mac.push({ sw:e.sw, vlan:e.vlan, mac:srcMac, port:e.port, host:`${cur.name} ${egress.name}` });
     if (!target) {
       let why = `${cur.name} broadcast "who has ${numToIp(nh)}?" out ${egress.name}, but nothing it reached has that IP.`;
       if (seg.drops.length) why += ` On the way: ${seg.drops.map(x => x.why).join("; ")}.`;
@@ -333,7 +339,12 @@ export function trace(topo, srcId, dstIpStr) {
     }
     const tdev = deviceById(topo, target.dev);
     const tIface = ifaceAt(tdev, target.port, target.tag);
-    const srcMac = macOf(cur, egress.port), dstMac = macOf(tdev, target.port);
+    const dstMac = macOf(tdev, target.port);
+    const egressIp = cur.type === "pc" ? srcAddr.ip : interfaces(cur).find(f => f.port === egress.port && f.tag === egress.tag)?.a.ip;
+    learned.arp.push({ dev:cur.id, ip:numToIp(nh), mac:dstMac, iface:egress.name, host:`${tdev.name} ${tIface.name}` });
+    if (egressIp !== undefined) learned.arp.push({ dev:tdev.id, ip:numToIp(egressIp), mac:srcMac, iface:tIface.name, host:`${cur.name} ${egress.name}` });
+    // The unicast ARP reply teaches the switches on the path where the target lives
+    for (const h of target.hops) learned.mac.push({ sw:h.sw, vlan:h.vlan, mac:dstMac, port:h.outPort, host:`${tdev.name} ${tIface.name}` });
     steps.push({ kind:"arp", at:cur.id, links:target.links, title:`ARP: ${numToIp(nh)} is at ${dstMac}`,
       detail:`${cur.name} broadcasts "who has ${numToIp(nh)}?"${target.hops.length ? ` in VLAN ${target.hops[0].vlan}` : ""}; ${tdev.name} ${tIface.name} replies with its MAC.` });
 
@@ -357,13 +368,29 @@ export function trace(topo, srcId, dstIpStr) {
     if (deviceIps(tdev).includes(dst)) {
       steps.push({ kind:"deliver", at:tdev.id, links:[], title:`Delivered to ${tdev.name}`,
         detail:`${numToIp(dst)} belongs to ${tdev.name}. The packet crossed ${steps.filter(s => s.kind === "route" && deviceById(topo, s.at)?.type === "router").length} router(s); final TTL ${ttl}.` });
-      return { ok:true, steps };
+      return { ok:true, steps, learned, ttl };
     }
     if (tdev.type !== "router") return fail(tdev.id, `${tdev.name} is not a router — packet dropped`, "End hosts don't forward packets for others.");
     cur = tdev;
   }
   return fail(cur.id, "Gave up after too many hops", "This looks like a routing loop.");
 }
+
+// ── Learned state (ARP caches, switch MAC tables) ─────────────────────────────
+export const emptyTables = () => ({ arp:{}, mac:{} });
+
+export function mergeLearned(tables, learned, ping) {
+  const next = { arp:{ ...tables.arp }, mac:{ ...tables.mac } };
+  (learned?.arp || []).forEach(e => { next.arp[`${e.dev}|${e.ip}`] = { ...e, ping }; });
+  (learned?.mac || []).forEach(e => { next.mac[`${e.sw}|${e.vlan}|${e.mac}`] = { ...e, ping }; });
+  return next;
+}
+
+export const arpTableOf = (tables, devId) =>
+  Object.values(tables.arp).filter(e => e.dev === devId).sort((a, b) => ipToNum(a.ip) - ipToNum(b.ip));
+
+export const macTableOf = (tables, swId) =>
+  Object.values(tables.mac).filter(e => e.sw === swId).sort((a, b) => a.vlan - b.vlan || a.port - b.port || a.mac.localeCompare(b.mac));
 
 // ── Configuration checks ──────────────────────────────────────────────────────
 export function problems(topo) {
