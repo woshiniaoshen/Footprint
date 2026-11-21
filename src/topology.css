@@ -37,6 +37,40 @@
 .tb-devip   { font-size: 8.5px; fill: rgba(241,245,249,0.5); font-family: 'JetBrains Mono', monospace; pointer-events: none; }
 .tb-portlbl { font-size: 7.5px; fill: rgba(241,245,249,0.38); font-family: 'JetBrains Mono', monospace; pointer-events: none; }
 .tb-empty   { font-size: 14px; fill: var(--quiet); font-family: Inter, sans-serif; }
+.tb-trunklbl { font-size: 7.5px; font-weight: 700; fill: rgba(241,245,249,0.6); font-family: 'JetBrains Mono', monospace; pointer-events: none; }
+.tb-vlanpill { font-size: 8px; font-weight: 700; font-family: 'JetBrains Mono', monospace; pointer-events: none; }
+
+.tb-ports { width: 100%; border-collapse: collapse; font-size: 11px; margin: 4px 0 6px; table-layout: fixed; }
+.tb-ports th:nth-child(1) { width: 38%; }
+.tb-ports th:nth-child(2) { width: 32%; }
+.tb-ports select { padding: 4px 2px; font-family: Inter, sans-serif; }
+.tb-ports th { text-align: left; color: var(--quiet); font-weight: 600; font-size: 10px; padding: 3px 4px; border-bottom: 1px solid var(--line); }
+.tb-ports td { padding: 4px; vertical-align: middle; }
+.tb-ports td:first-child { display: flex; flex-direction: column; gap: 1px; }
+.tb-ports td b { font-family: 'JetBrains Mono', monospace; color: #42d9b8; font-size: 11px; }
+.tb-ports td span { font-size: 9.5px; color: var(--quiet); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 110px; }
+.tb-ports select, .tb-ports input {
+  width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--line); color: var(--text);
+  border-radius: 6px; padding: 4px 6px; font-size: 11px; font-family: 'JetBrains Mono', monospace; outline: none;
+}
+.tb-ports input.tb-bad, .tb-sub input.tb-bad { border-color: rgba(230,57,70,0.6); }
+.tb-ports select option { background: #111827; }
+.tb-unwired { opacity: 0.45; }
+.tb-note code { font-family: 'JetBrains Mono', monospace; color: var(--text); font-size: 10.5px; }
+
+.tb-sub { display: flex; align-items: center; gap: 4px; margin: 0 0 6px 10px; }
+.tb-sub span { font-size: 10.5px; color: #fb923c; font-family: 'JetBrains Mono', monospace; }
+.tb-sub input {
+  background: rgba(0,0,0,0.3); border: 1px solid var(--line); color: var(--text);
+  border-radius: 6px; padding: 5px 6px; font-size: 11px; font-family: 'JetBrains Mono', monospace; outline: none; min-width: 0;
+}
+.tb-sub .tb-sub-vlan { width: 46px; flex-shrink: 0; }
+.tb-sub input:not(.tb-sub-vlan) { flex: 1; }
+.tb-sub button {
+  background: none; border: 1px solid rgba(230,57,70,0.35); color: #e63946;
+  border-radius: 6px; cursor: pointer; padding: 3px 6px; font-size: 10px;
+}
+.tb-add-sm { margin: 0 0 8px 10px; width: calc(100% - 10px); padding: 4px; font-size: 10.5px; }
 .tb-dot { transition: transform 0.55s ease-in-out; pointer-events: none; }
 .tb-hint { font-size: 10.5px; color: var(--quiet); text-align: center; padding: 6px 0 2px; }
 

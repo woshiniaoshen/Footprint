@@ -1,8 +1,9 @@
-import { useState, useRef, useMemo, useEffect, Fragment } from "react";
+import { useState, useRef, useMemo, useEffect } from "react";
 import {
   PRESETS, makeDevice, nextNum, connect, removeDevice, deviceById, linkAt, otherEnd,
   portName, portLabel, portAddr, parseAddr, parseIp, macOf, routingTable, problems,
-  trace, deviceIps, numToIp, PORT_COUNT,
+  trace, deviceIps, numToIp, interfaces, switchPort, parseAllowed, validVlan,
+  linkIsTrunk, accessVlanOf, usesVlans, NATIVE_VLAN,
 } from "./topoEngine.js";
 import "./topology.css";
 
@@ -10,6 +11,8 @@ const STORAGE_KEY = "osi-topology-v1";
 const VIEW_W = 1000, VIEW_H = 460;
 const TYPE_COLOR = { pc:"#63b3ed", switch:"#42d9b8", router:"#fb923c" };
 const KIND_ICON = { route:"🧭", arp:"❓", send:"📤", switch:"🔀", arrive:"📥", deliver:"✅", drop:"⛔" };
+const VLAN_PALETTE = ["#63b3ed", "#f2c36b", "#a78bfa", "#f472b6", "#4ade80", "#fb923c"];
+const vlanColor = v => (v && v !== NATIVE_VLAN ? VLAN_PALETTE[v % VLAN_PALETTE.length] : null);
 
 function loadSaved() {
   try {
@@ -62,8 +65,9 @@ export default function TopologyBuilder() {
 
   const issues = useMemo(() => problems(topo), [topo]);
   const pcs = topo.devices.filter(d => d.type === "pc");
-  const targets = topo.devices.flatMap(d => d.ports.map((_, i) => ({ d, i, a: portAddr(d, i) })).filter(x => x.a))
-    .map(({ d, i, a }) => ({ ip: numToIp(a.ip), label: `${d.name}${d.type === "router" ? ` ${portName("router", i)}` : ""} · ${numToIp(a.ip)}` }));
+  const targets = topo.devices.flatMap(d => interfaces(d).map(f => ({ d, f })))
+    .map(({ d, f }) => ({ ip: numToIp(f.a.ip), label: `${d.name}${d.type === "router" ? ` ${f.name}` : ""} · ${numToIp(f.a.ip)}` }));
+  const vlanMode = usesVlans(topo);
   const srcId = pcs.some(p => p.id === src) ? src : pcs[0]?.id || "";
   const dstIp = targets.some(t => t.ip === dst) ? dst : targets.filter(t => !deviceIps(deviceById(topo, srcId) || { ports:[] }).map(numToIp).includes(t.ip)).at(-1)?.ip || "";
 
@@ -211,6 +215,15 @@ export default function TopologyBuilder() {
               const a = deviceById(topo, l.a.dev), b = deviceById(topo, l.b.dev);
               if (!a || !b) return null;
               const hot = hotLinks.has(l.id), picked = sel?.kind === "link" && sel.id === l.id;
+              const trunk = vlanMode && linkIsTrunk(topo, l);
+              const accessVlan = [l.a, l.b].map(end => {
+                const d = deviceById(topo, end.dev);
+                if (d?.type !== "switch") return null;
+                const sp = switchPort(d.ports[end.port]);
+                return sp.mode === "access" ? sp.vlan : null;
+              }).find(v => v !== null);
+              const idle = !vlanMode ? "rgba(255,255,255,0.22)" : trunk ? "rgba(241,245,249,0.45)" : vlanColor(accessVlan) ? `${vlanColor(accessVlan)}aa` : "rgba(255,255,255,0.22)";
+              const stroke = picked ? "#f2c36b" : hot ? "#42d9b8" : idle;
               const lbl = (from, to, port) => {
                 const len = Math.hypot(to.x - from.x, to.y - from.y) || 1;
                 const k = Math.min(0.42, 40 / len);
@@ -220,8 +233,13 @@ export default function TopologyBuilder() {
               return (
                 <g key={l.id} onPointerDown={e => { e.stopPropagation(); setSel({ kind:"link", id:l.id }); }} style={{ cursor:"pointer" }}>
                   <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="transparent" strokeWidth={14}/>
-                  <line x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-                    stroke={picked ? "#f2c36b" : hot ? "#42d9b8" : "rgba(255,255,255,0.22)"} strokeWidth={hot || picked ? 3 : 1.8}/>
+                  {trunk ? <>
+                    <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={stroke} strokeWidth={hot || picked ? 6 : 5}/>
+                    <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#111827" strokeWidth={hot || picked ? 2.5 : 2}/>
+                    <text x={(a.x + b.x) / 2} y={(a.y + b.y) / 2 - 7} className="tb-trunklbl" textAnchor="middle">802.1Q</text>
+                  </> : (
+                    <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={stroke} strokeWidth={hot || picked ? 3 : 1.8}/>
+                  )}
                   {lbl(a, b, l.a.port)}
                   {lbl(b, a, l.b.port)}
                 </g>
@@ -234,7 +252,8 @@ export default function TopologyBuilder() {
               const isPending = pending === d.id;
               const hasIssue = issues.some(p => p.dev === d.id && p.level === "error");
               const ring = picked || isPending ? "#f2c36b" : hot ? (step?.kind === "drop" ? "#e63946" : "#42d9b8") : visited.has(d.id) ? `${color}aa` : "rgba(255,255,255,0.25)";
-              const addrs = d.type === "switch" ? [] : d.ports.map((p, i) => ({ i, a: portAddr(d, i) })).filter(x => x.a);
+              const ifs = d.type === "router" ? interfaces(d) : [];
+              const pcVlan = vlanMode && d.type === "pc" ? accessVlanOf(topo, d.id, 0) : null;
               return (
                 <g key={d.id} onPointerDown={e => onDeviceDown(e, d)} className="tb-dev">
                   <circle cx={d.x} cy={d.y} r={25} fill={hot ? "rgba(66,217,184,0.12)" : "#0d1520"} stroke={ring} strokeWidth={hot || picked || isPending ? 2.5 : 1.2}
@@ -243,11 +262,20 @@ export default function TopologyBuilder() {
                   {hasIssue && <circle cx={d.x + 19} cy={d.y - 19} r={5} fill="#e63946"/>}
                   <text x={d.x} y={d.y + 38} textAnchor="middle" className="tb-devname">{d.name}</text>
                   {d.type === "pc" && <text x={d.x} y={d.y + 50} textAnchor="middle" className="tb-devip">{d.ports[0].addr || "no IP"}</text>}
-                  {d.type === "router" && addrs.map(({ i, a }, k) => (
-                    <text key={i} x={d.x} y={d.y + 50 + k * 11} textAnchor="middle" className="tb-devip">
-                      {portName("router", i)} {numToIp(a.ip)}/{a.prefix}
+                  {d.type === "router" && ifs.map((f, k) => (
+                    <text key={f.name} x={d.x} y={d.y + 50 + k * 11} textAnchor="middle" className="tb-devip"
+                      style={vlanColor(f.tag) ? { fill:vlanColor(f.tag) } : undefined}>
+                      {f.name} {numToIp(f.a.ip)}/{f.a.prefix}
                     </text>
                   ))}
+                  {pcVlan !== null && (
+                    <g>
+                      <rect x={d.x - 46} y={d.y - 31} width={30} height={13} rx={6.5} fill="#0d1520"
+                        stroke={vlanColor(pcVlan) || "rgba(255,255,255,0.35)"}/>
+                      <text x={d.x - 31} y={d.y - 21.5} textAnchor="middle" className="tb-vlanpill"
+                        style={{ fill: vlanColor(pcVlan) || "rgba(241,245,249,0.6)" }}>V{pcVlan}</text>
+                    </g>
+                  )}
                 </g>
               );
             })}
@@ -333,6 +361,13 @@ export default function TopologyBuilder() {
                           <tr><th>L3 src IP</th><td>{step.frame.srcIp}</td></tr>
                           <tr><th>L3 dst IP</th><td>{step.frame.dstIp}</td></tr>
                           <tr><th>TTL</th><td>{step.frame.ttl}</td></tr>
+                          {vlanMode && (
+                            <tr><th>802.1Q</th><td style={vlanColor(step.frame.tag ?? step.frame.vlan) ? { color:vlanColor(step.frame.tag ?? step.frame.vlan) } : undefined}>
+                              {step.frame.tag !== null && step.frame.tag !== undefined
+                                ? `tag ${step.frame.tag}`
+                                : step.frame.vlan ? `untagged (VLAN ${step.frame.vlan})` : "untagged"}
+                            </td></tr>
+                          )}
                         </tbody>
                       </table>
                     )}
@@ -392,12 +427,38 @@ function Inspector({ d, topo, edit }) {
       </>}
 
       {d.type === "switch" && <>
-        <p className="tb-note">Layer 2 only — a switch needs no IP. It forwards frames by MAC address between its {PORT_COUNT.switch} ports.</p>
-        <dl className="tb-facts">
-          {d.ports.map((_, i) => linkAt(topo, d.id, i) && (
-            <Fragment key={i}><dt>{portName("switch", i)}</dt><dd>{peerText(topo, d, i)}</dd></Fragment>
-          ))}
-        </dl>
+        <p className="tb-note">Layer 2 only — no IP needed. An access port belongs to one VLAN and carries untagged frames; a trunk carries many VLANs using 802.1Q tags.</p>
+        <table className="tb-ports">
+          <thead><tr><th>Port</th><th>Mode</th><th>VLAN / allowed</th></tr></thead>
+          <tbody>
+            {d.ports.map((p, i) => {
+              const sp = switchPort(p);
+              const wired = !!linkAt(topo, d.id, i);
+              const c = sp.mode === "access" ? vlanColor(sp.vlan) : null;
+              const badVlan = p.vlan !== undefined && !validVlan(Number(p.vlan));
+              return (
+                <tr key={i} className={wired ? "" : "tb-unwired"}>
+                  <td><b>{portName("switch", i)}</b><span>{wired ? peerText(topo, d, i) : "unused"}</span></td>
+                  <td>
+                    <select value={sp.mode} onChange={e => set(x => { x.ports[i].mode = e.target.value; })}>
+                      <option value="access">Access</option>
+                      <option value="trunk">Trunk</option>
+                    </select>
+                  </td>
+                  <td>
+                    {sp.mode === "access"
+                      ? <input className={badVlan ? "tb-bad" : ""} value={p.vlan ?? NATIVE_VLAN} inputMode="numeric"
+                          style={c ? { color:c, borderColor:`${c}88` } : undefined}
+                          onChange={e => set(x => { x.ports[i].vlan = e.target.value; })}/>
+                      : <input className={parseAllowed(p.allowed).error ? "tb-bad" : ""} value={p.allowed ?? ""} placeholder="all"
+                          onChange={e => set(x => { x.ports[i].allowed = e.target.value; })}/>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <p className="tb-note">Trunk allowed list: blank means every VLAN, or list them like <code>10,20,30-35</code>. VLAN 1 is the native VLAN and travels untagged.</p>
       </>}
 
       {d.type === "router" && <>
@@ -405,8 +466,28 @@ function Inspector({ d, topo, edit }) {
         {d.ports.map((p, i) => (
           <div key={i} className="tb-iface">
             <div className="tb-iface-head"><b>{portName("router", i)}</b><span>{peerText(topo, d, i)}</span></div>
-            <Field label="" value={p.addr} placeholder={linkAt(topo, d.id, i) ? "10.0.0.1/24" : "unused"}
+            <Field label={(p.subs || []).length ? "Untagged address (optional)" : ""} value={p.addr}
+              placeholder={(p.subs || []).length ? "none" : linkAt(topo, d.id, i) ? "10.0.0.1/24" : "unused"}
               onChange={v => set(x => { x.ports[i].addr = v; })} check={p.addr ? parseAddr(p.addr) : null}/>
+            {(p.subs || []).map((s, k) => {
+              const v = Number(s.vlan);
+              const c = vlanColor(validVlan(v) ? v : null);
+              const sa = s.addr ? parseAddr(s.addr) : null;
+              return (
+                <div key={k} className="tb-sub">
+                  <span>{portName("router", i)}.</span>
+                  <input className={`tb-sub-vlan${s.vlan && (!validVlan(v) || v === NATIVE_VLAN) ? " tb-bad" : ""}`} value={s.vlan} placeholder="10"
+                    inputMode="numeric" style={c ? { color:c, borderColor:`${c}88` } : undefined}
+                    onChange={e => set(x => { x.ports[i].subs[k].vlan = e.target.value; })}/>
+                  <input className={sa?.error ? "tb-bad" : ""} value={s.addr} placeholder="192.168.10.1/24"
+                    onChange={e => set(x => { x.ports[i].subs[k].addr = e.target.value; })}/>
+                  <button onClick={() => set(x => { x.ports[i].subs.splice(k, 1); })} title="Remove subinterface">✕</button>
+                </div>
+              );
+            })}
+            <button className="tb-add tb-add-sm" onClick={() => set(x => { x.ports[i].subs = [...(x.ports[i].subs || []), { vlan:"", addr:"" }]; })}>
+              + VLAN subinterface
+            </button>
           </div>
         ))}
         <div className="tb-subtitle">Static routes</div>
@@ -428,7 +509,7 @@ function Inspector({ d, topo, edit }) {
               <tr key={i} className={r.port === null ? "tb-dead" : ""}>
                 <td>{r.type}</td><td>{numToIp(r.net)}/{r.prefix}</td>
                 <td>{r.via === null ? "direct" : numToIp(r.via)}</td>
-                <td>{r.port === null ? "unreachable" : portName("router", r.port)}</td>
+                <td>{r.port === null ? "unreachable" : r.iface}</td>
               </tr>
             ))}
           </tbody>
