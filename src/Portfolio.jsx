@@ -1,302 +1,197 @@
 import "./portfolio.css";
 
-const skills = [
-  "Cybersecurity",
-  "Cloud Infrastructure",
-  "Attack Detection",
-  "JavaScript",
-  "Python",
-  "Java",
-  "C#",
-  "PHP",
-  "MySQL",
-  "Docker",
-  "AWS",
-  "Networking",
-  "UX Design",
+const GITHUB = "https://github.com/woshiniaoshen";
+const LINKEDIN = "https://www.linkedin.com/in/nelson-tan-b58170206/";
+
+const projects = [
+  {
+    name: "NetWatch",
+    type: "Security",
+    summary: "A simulated network intrusion detection dashboard. Detection rules run over 600+ generated TCP and UDP events to flag port scans, brute-force logins and data exfiltration, with severity alerts per source IP.",
+    stack: ["React", "Detection rules", "Traffic analytics"],
+    links: [{ label: "Open dashboard", href: "/netwatch/" }],
+  },
+  {
+    name: "Wireshark Companion",
+    type: "Security tool",
+    summary: "Analyses .pcap and .pcapng captures entirely in the browser. A hand-written binary parser decodes Ethernet, IP, TCP and UDP headers, then summarises protocols, top talkers and a traffic timeline. Files never leave the device.",
+    stack: ["JavaScript", "Binary parsing", "React"],
+    links: [{ label: "Open tool", href: "/wireshark/" }],
+  },
+  {
+    name: "OSI Layer Explorer",
+    type: "Teaching tool",
+    summary: "Steps through how a packet crosses all seven OSI layers between two LANs, showing each header as it is added and removed. Includes a topology builder for switches, routers and VLAN trunks.",
+    stack: ["React", "Networking", "VLANs"],
+    links: [{ label: "Open explorer", href: "/osi/" }],
+  },
+  {
+    name: "Hardware Store",
+    type: "Coursework · Nanyang Polytechnic",
+    summary: "An e-commerce site built in PHP and MySQL with product search, user accounts, sessions and image uploads. Shown here as a read-only demo.",
+    stack: ["PHP", "MySQL", "HTML/CSS", "JavaScript"],
+    links: [
+      { label: "View demo", href: "/projects/hardware-store/" },
+      { label: "Source", href: "https://github.com/woshiniaoshen/Poly-php-project", external: true },
+    ],
+  },
 ];
+
+const experience = [
+  { org: "Nokia Solutions and Networks", detail: "Internship", kind: "Industry" },
+  { org: "Singapore Management University", detail: "BSc Computer Science, Cybersecurity track", kind: "Education", status: "In progress" },
+  { org: "Nanyang Polytechnic", detail: "Diploma in Infocomm & Media Engineering, Cloud and Infrastructure Services", kind: "Education" },
+  { org: "Google Cybersecurity Certificate", detail: "Professional certificate", kind: "Certification", status: "In progress" },
+];
+
+const skills = [
+  { group: "Security", items: "Attack detection, packet analysis, networking, VLANs" },
+  { group: "Languages", items: "JavaScript, Python, Java, C#, PHP, SQL" },
+  { group: "Infrastructure", items: "AWS, Docker, Cloudflare, cloud infrastructure" },
+  { group: "Other", items: "React, MySQL, UX design" },
+];
+
+function ProjectLink({ href, label, external }) {
+  return (
+    <a className="link" href={href} {...(external ? { target: "_blank", rel: "noreferrer" } : {})}>
+      {label} <span aria-hidden="true">{external ? "↗" : "→"}</span>
+    </a>
+  );
+}
 
 export default function Portfolio() {
   return (
-    <main className="portfolio-shell">
-      <header className="portfolio-nav">
-        <a className="portfolio-name" href="#top" aria-label="Nelson Tan home">
-          <span>NT</span>
-          <strong>Nelson Tan</strong>
-        </a>
-        <nav aria-label="Main navigation">
-          <a href="#work">Work</a>
-          <a href="#values">Values</a>
-          <a href="#about">About</a>
-          <a href="https://github.com/woshiniaoshen" target="_blank" rel="noreferrer">GitHub</a>
-          <a href="https://www.linkedin.com/in/nelson-tan-b58170206/" target="_blank" rel="noreferrer">LinkedIn</a>
-        </nav>
+    <div className="page">
+      <header className="site-header">
+        <div className="container header-inner">
+          <a className="wordmark" href="#top">Nelson Tan</a>
+          <nav aria-label="Main navigation">
+            <a href="#projects">Projects</a>
+            <a href="#experience">Experience</a>
+            <a href="#about">About</a>
+          </nav>
+        </div>
       </header>
 
-      <section className="portfolio-hero" id="top">
-        <div className="hero-copy">
-          <p className="hero-kicker">Cybersecurity · Cloud · Software</p>
+      <main id="top">
+        <section className="container hero">
+          <p className="meta">Singapore · Computer Science, SMU</p>
           <h1>Nelson Tan</h1>
-          <p className="hero-lead">
-            Cybersecurity student and developer building secure, practical digital experiences.
+          <p className="lead">
+            I study Computer Science at Singapore Management University on the cybersecurity track.
+            I build tools for understanding networks and the security problems in them, and I have
+            interned at Nokia Solutions and Networks.
           </p>
-          <p className="hero-summary">
-            I study Computer Science at Singapore Management University on the cybersecurity track,
-            with a background in cloud infrastructure and industry experience at Nokia Solutions and Networks.
-          </p>
-          <div className="hero-actions">
-            <a className="primary-link" href="#work">View my work</a>
-            <a className="text-link" href="https://github.com/woshiniaoshen" target="_blank" rel="noreferrer">Explore GitHub</a>
+          <div className="actions">
+            <a className="button button-primary" href="#projects">View projects</a>
+            <a className="button" href={GITHUB} target="_blank" rel="noreferrer">GitHub</a>
+            <a className="button" href={LINKEDIN} target="_blank" rel="noreferrer">LinkedIn</a>
           </div>
-        </div>
-        <div className="hero-facts" aria-label="Profile highlights">
-          <div className="hero-signal">
-            <span>Current focus</span>
-            <strong>Understanding attacks to build stronger defenses.</strong>
-          </div>
-          <dl>
-            <div><dt>Based in</dt><dd>Singapore</dd></div>
-            <div><dt>Studying</dt><dd>Computer Science at SMU</dd></div>
-            <div><dt>Track</dt><dd>Cybersecurity</dd></div>
-          </dl>
-        </div>
-      </section>
+        </section>
 
-      <section className="portfolio-work" id="work">
-        <div className="section-heading">
-          <p>Selected work</p>
-          <h2>Projects built around real problems</h2>
-        </div>
+        <section className="section" id="projects">
+          <div className="container">
+            <h2 className="section-title">Projects</h2>
 
-        <article className="project-feature">
-          <a className="project-visual" href="/footprint/" aria-label="Open Footprint">
-            <img src="/footprint-preview.png" alt="Footprint travel map application" />
-          </a>
-          <div className="project-copy">
-            <p className="project-number">01 · Featured project</p>
-            <h3>Footprint</h3>
-            <p>
-              A travel mapping web app that reads photo location data, builds personal and global heatmaps,
-              supports HEIC uploads, and lets users share memories with friends.
+            <article className="featured">
+              <div className="featured-copy">
+                <p className="meta">Web app · Featured</p>
+                <h3>Footprint</h3>
+                <p>
+                  Upload photos and see where they were taken on a map. Footprint reads GPS data from
+                  photo metadata, including HEIC and Xiaomi motion photos, builds personal and global
+                  heatmaps, and lets friends share their trips.
+                </p>
+                <ul className="stack" aria-label="Technologies">
+                  {["React", "Vite", "Firebase", "Cloudflare Pages"].map(s => <li key={s}>{s}</li>)}
+                </ul>
+                <div className="links">
+                  <ProjectLink href="/footprint/" label="Open app" />
+                  <ProjectLink href="https://github.com/woshiniaoshen/Footprint" label="Source" external />
+                </div>
+              </div>
+              <a className="featured-image" href="/footprint/" aria-label="Open Footprint">
+                <img src="/footprint-preview.png" alt="Footprint showing photo pins on a world map" />
+              </a>
+            </article>
+
+            <div className="project-grid">
+              {projects.map(p => (
+                <article className="project" key={p.name}>
+                  <p className="meta">{p.type}</p>
+                  <h3>{p.name}</h3>
+                  <p>{p.summary}</p>
+                  <ul className="stack" aria-label="Technologies">
+                    {p.stack.map(s => <li key={s}>{s}</li>)}
+                  </ul>
+                  <div className="links">
+                    {p.links.map(l => <ProjectLink key={l.label} {...l} />)}
+                  </div>
+                </article>
+              ))}
+            </div>
+
+            <p className="more">
+              More coursework and experiments are on <a className="inline-link" href={GITHUB} target="_blank" rel="noreferrer">GitHub</a>.
             </p>
-            <ul>
-              <li>React and Vite frontend</li>
-              <li>Firebase authentication and Firestore</li>
-              <li>Cloudflare deployment</li>
-              <li>Privacy controls, messaging, and social activity</li>
-            </ul>
-            <div className="project-actions">
-              <a className="primary-link" href="/footprint/">Launch Footprint</a>
-              <a className="text-link" href="https://github.com/woshiniaoshen/Footprint" target="_blank" rel="noreferrer">Source code</a>
-            </div>
           </div>
-        </article>
+        </section>
 
-        <article className="project-feature project-feature-secondary">
-          <a className="project-visual" href="/projects/hardware-store/" aria-label="Open the hardware store demo">
-            <img src="/hardware-store-preview.png" alt="Yong Huat Hardware academic website" />
-          </a>
-          <div className="project-copy">
-            <p className="project-number">02 · Polytechnic project</p>
-            <h3>Hardware Store</h3>
-            <p>
-              A responsive PHP and MySQL e-commerce coursework project with product browsing,
-              account flows, search, sessions, and profile-image uploads.
-            </p>
-            <ul>
-              <li>PHP and MySQL backend</li>
-              <li>Responsive HTML, CSS, and JavaScript</li>
-              <li>Product catalogue and account workflows</li>
-              <li>Safe read-only portfolio demonstration</li>
-            </ul>
-            <div className="project-actions">
-              <a className="primary-link" href="/projects/hardware-store/">Try the demo</a>
-              <a className="text-link" href="https://github.com/woshiniaoshen/Poly-php-project" target="_blank" rel="noreferrer">Source code</a>
-            </div>
+        <section className="section" id="experience">
+          <div className="container two-col">
+            <h2 className="section-title">Experience &amp; education</h2>
+            <ol className="timeline">
+              {experience.map(e => (
+                <li key={e.org}>
+                  <span className="meta">{e.kind}</span>
+                  <div>
+                    <strong>{e.org}</strong>
+                    <p>{e.detail}{e.status && <span className="status">{e.status}</span>}</p>
+                  </div>
+                </li>
+              ))}
+            </ol>
           </div>
-        </article>
+        </section>
 
-        <article className="project-feature project-feature-secondary">
-          <a className="project-visual" href="/netwatch/" aria-label="Open NetWatch dashboard">
-            <div style={{ width: "100%", height: "100%", background: "linear-gradient(135deg, #0a0f1a 0%, #111827 60%, #0d1f2d 100%)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <svg width="80" height="80" viewBox="0 0 64 64" fill="none">
-                <rect width="64" height="64" rx="14" fill="#111827" />
-                <circle cx="32" cy="32" r="18" stroke="#42d9b8" strokeWidth="2.5" fill="none" />
-                <circle cx="32" cy="32" r="10" stroke="#63b3ed" strokeWidth="2" fill="none" />
-                <circle cx="32" cy="32" r="3" fill="#e63946" />
-                <line x1="32" y1="6" x2="32" y2="14" stroke="#42d9b8" strokeWidth="2" strokeLinecap="round" />
-                <line x1="32" y1="50" x2="32" y2="58" stroke="#42d9b8" strokeWidth="2" strokeLinecap="round" />
-                <line x1="6" y1="32" x2="14" y2="32" stroke="#42d9b8" strokeWidth="2" strokeLinecap="round" />
-                <line x1="50" y1="32" x2="58" y2="32" stroke="#42d9b8" strokeWidth="2" strokeLinecap="round" />
-              </svg>
-            </div>
-          </a>
-          <div className="project-copy">
-            <p className="project-number">03 · Security project</p>
-            <h3>NetWatch</h3>
-            <p>
-              A network intrusion detection dashboard that simulates real traffic logs, detects
-              port scans, brute-force attempts, and data exfiltration, and visualises threats in real time.
-            </p>
-            <ul>
-              <li>React frontend with live detection rules</li>
-              <li>Simulated TCP/UDP event log with 600+ entries</li>
-              <li>Traffic volume chart, protocol split, and top-IP ranking</li>
-              <li>Threat severity alerts with per-IP flagging</li>
-            </ul>
-            <div className="project-actions">
-              <a className="primary-link" href="/netwatch/">Launch NetWatch</a>
-            </div>
-          </div>
-        </article>
-
-        <article className="project-feature project-feature-secondary">
-          <a className="project-visual" href="/wireshark/" aria-label="Open Wireshark Companion">
-            <div style={{ width: "100%", height: "100%", background: "linear-gradient(135deg, #0a0f1a 0%, #111827 60%, #0d1f2d 100%)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <svg width="80" height="80" viewBox="0 0 64 64" fill="none">
-                <rect width="64" height="64" rx="14" fill="#111827" />
-                <rect x="10" y="20" width="44" height="6" rx="3" fill="#42d9b8" opacity="0.9" />
-                <rect x="10" y="30" width="30" height="6" rx="3" fill="#63b3ed" opacity="0.8" />
-                <rect x="10" y="40" width="38" height="6" rx="3" fill="#f2c36b" opacity="0.8" />
-                <circle cx="50" cy="23" r="4" fill="#42d9b8" />
-                <circle cx="36" cy="33" r="4" fill="#63b3ed" />
-                <circle cx="44" cy="43" r="4" fill="#f2c36b" />
-              </svg>
-            </div>
-          </a>
-          <div className="project-copy">
-            <p className="project-number">04 · Security tool</p>
-            <h3>Wireshark Companion</h3>
-            <p>
-              Drop a <code>.pcap</code> or <code>.pcapng</code> file and get an instant visual breakdown —
-              protocol split, traffic timeline, top IPs, and every packet in a searchable table.
-              Parses binary data entirely in the browser with no upload.
-            </p>
-            <ul>
-              <li>Custom binary parser for .pcap and .pcapng formats</li>
-              <li>Decodes Ethernet, IP, TCP, and UDP headers from raw bytes</li>
-              <li>Auto-generates a plain-English capture summary</li>
-              <li>Applies NetWatch threat detection rules on real captures</li>
-            </ul>
-            <div className="project-actions">
-              <a className="primary-link" href="/wireshark/">Launch Companion</a>
-            </div>
-          </div>
-        </article>
-
-        <article className="project-feature project-feature-secondary">
-          <a className="project-visual" href="/osi/" aria-label="Open OSI Layer Explorer">
-            <div style={{ width:"100%", height:"100%", background:"linear-gradient(135deg,#0a0f1a 0%,#111827 60%,#0d1f2d 100%)", display:"flex", alignItems:"center", justifyContent:"center" }}>
-              <svg width="80" height="80" viewBox="0 0 64 64" fill="none">
-                <rect width="64" height="64" rx="14" fill="#111827"/>
-                {[["#a78bfa",7],["#63b3ed",18],["#42d9b8",29],["#f2c36b",40],["#fb923c",51]].map(([c,y]) => (
-                  <rect key={y} x="8" y={y} width="48" height="7" rx="3" fill={c} opacity="0.85"/>
+        <section className="section" id="about">
+          <div className="container two-col">
+            <h2 className="section-title">About</h2>
+            <div>
+              <div className="prose">
+                <p>
+                  I came to security through cloud infrastructure. My diploma at Nanyang Polytechnic
+                  focused on cloud and infrastructure services, and I am now studying how systems are
+                  attacked so I can defend them better.
+                </p>
+                <p>
+                  I like breaking problems into small, testable steps and staying with them until the
+                  root cause is clear. I take the ethical side of security seriously: responsible conduct,
+                  clear rules and respect for the people behind the systems.
+                </p>
+              </div>
+              <dl className="skills">
+                {skills.map(s => (
+                  <div key={s.group}>
+                    <dt>{s.group}</dt>
+                    <dd>{s.items}</dd>
+                  </div>
                 ))}
-              </svg>
-            </div>
-          </a>
-          <div className="project-copy">
-            <p className="project-number">05 · Learning tool</p>
-            <h3>OSI Layer Explorer</h3>
-            <p>
-              An interactive step-by-step walkthrough of how a network packet travels from one PC,
-              through every OSI layer, across two LANs via a router, and arrives at another PC.
-            </p>
-            <ul>
-              <li>20-step animated journey through all 7 OSI layers</li>
-              <li>Shows encapsulation and decapsulation header-by-header</li>
-              <li>Explains the router's Layer 2 / Layer 3 boundary role</li>
-              <li>Topology builder: wire up PCs, switches, routers and VLAN trunks, then trace a packet hop by hop</li>
-              <li>Keyboard navigation and auto-play mode</li>
-            </ul>
-            <div className="project-actions">
-              <a className="primary-link" href="/osi/">Launch Explorer</a>
+              </dl>
             </div>
           </div>
-        </article>
+        </section>
+      </main>
 
-        <a className="github-band" href="https://github.com/woshiniaoshen" target="_blank" rel="noreferrer">
-          <span>More experiments and coursework</span>
-          <strong>Browse all projects on GitHub</strong>
-          <span aria-hidden="true">↗</span>
-        </a>
-      </section>
-
-      <section className="portfolio-values" id="values">
-        <div className="section-heading">
-          <p>How I work</p>
-          <h2>Reliable thinking under real constraints</h2>
-        </div>
-        <div className="value-grid">
-          <article>
-            <span>01</span>
-            <h3>Problem solving</h3>
-            <p>I break complex technical issues into smaller, testable steps and keep working until the underlying cause is clear.</p>
-          </article>
-          <article>
-            <span>02</span>
-            <h3>Ethical security</h3>
-            <p>I believe effective cybersecurity starts with responsible conduct, clear rules, and respect for people and their boundaries.</p>
-          </article>
-          <article>
-            <span>03</span>
-            <h3>Team contribution</h3>
-            <p>I communicate openly, support shared goals, and value the different strengths that each person brings to a team.</p>
-          </article>
-        </div>
-      </section>
-
-      <section className="portfolio-about" id="about">
-        <div className="section-heading">
-          <p>About</p>
-          <h2>Security-minded, practical, and always learning</h2>
-        </div>
-        <div className="about-grid">
-          <div className="about-copy">
-            <p>
-              I am a problem-solver and team player who is passionate about protecting organisations and
-              the people within them. I value ethical conduct, responsibility, respect for others, and
-              following sound processes.
-            </p>
-            <p>
-              I hold a Diploma in Infocomm and Media Engineering, specialising in Cloud and Infrastructure
-              Services. I am currently pursuing a Bachelor of Science in Computer Science at Singapore
-              Management University and completing the Google Cybersecurity Certificate.
-            </p>
+      <footer className="site-footer">
+        <div className="container footer-inner">
+          <span>© {new Date().getFullYear()} Nelson Tan</span>
+          <div>
+            <a href={GITHUB} target="_blank" rel="noreferrer">GitHub</a>
+            <a href={LINKEDIN} target="_blank" rel="noreferrer">LinkedIn</a>
           </div>
-          <div className="experience-list">
-            <div>
-              <span>Industry</span>
-              <strong>Nokia Solutions and Networks</strong>
-              <p>Internship experience</p>
-            </div>
-            <div>
-              <span>Education</span>
-              <strong>Singapore Management University</strong>
-              <p>BSc Computer Science · Cybersecurity track</p>
-            </div>
-            <div>
-              <span>Education</span>
-              <strong>Nanyang Polytechnic</strong>
-              <p>Diploma in Infocomm &amp; Media Engineering · Cloud and Infrastructure Services</p>
-            </div>
-          </div>
-        </div>
-        <div className="skill-list" aria-label="Skills">
-          {skills.map((skill) => <span key={skill}>{skill}</span>)}
-        </div>
-      </section>
-
-      <footer className="portfolio-footer">
-        <div>
-          <strong>Nelson Tan</strong>
-          <span>Singapore</span>
-        </div>
-        <div>
-          <a href="https://github.com/woshiniaoshen" target="_blank" rel="noreferrer">GitHub</a>
-          <a href="https://www.linkedin.com/in/nelson-tan-b58170206/" target="_blank" rel="noreferrer">LinkedIn</a>
         </div>
       </footer>
-    </main>
+    </div>
   );
 }
