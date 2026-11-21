@@ -155,6 +155,24 @@
 .tb-steplist li.future { opacity: 0.45; }
 .tb-steplist li.k-drop { color: #e63946; }
 
+/* ── Traceroute ── */
+.tb-term {
+  margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: #05080f; border: 1px solid var(--line);
+  font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #c7d2fe; display: flex; flex-direction: column; gap: 1px;
+}
+.tb-termline {
+  background: none; border: none; text-align: left; color: #86efac; font: inherit; padding: 1px 2px; cursor: pointer; border-radius: 4px;
+  white-space: pre;
+}
+.tb-termline span { color: var(--quiet); margin-right: 8px; }
+.tb-termline:hover { background: rgba(255,255,255,0.05); }
+.tb-termline.miss { color: #f8a5ac; }
+.tb-termerr { color: #f8a5ac; margin-top: 4px; white-space: normal; }
+.tb-stagetag { background: rgba(255,255,255,0.08); color: var(--muted); }
+.tb-step-expire { background: rgba(242,195,107,0.08); border-color: rgba(242,195,107,0.35); }
+.tb-steplist li.k-expire { color: #f2c36b; }
+.tb-seg button { white-space: nowrap; }
+
 /* ── NAT ── */
 .tb-iface-head { align-items: center; gap: 6px; }
 .tb-iface-head span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

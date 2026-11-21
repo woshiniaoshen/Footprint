@@ -558,8 +558,11 @@ export function trace(topo, srcId, dstIpStr, opts = {}) {
   };
   if (!src) return fail(null, "Pick a source device");
   if (dst === null) return fail(srcId, "Destination is not a valid IP");
-  const srcAddr = portAddr(src, 0);
-  if (src.type !== "pc" || !srcAddr) return fail(srcId, `${src.name} has no valid IP address`, "Give the PC an address such as 192.168.1.10/24.");
+  // Routers can originate packets (ICMP errors) from one of their own interface addresses
+  const srcAddr = src.type === "router"
+    ? interfaces(src).find(f => f.a.ip === parseIp(opts.srcIp))?.a ?? null
+    : portAddr(src, 0);
+  if (!srcAddr) return fail(srcId, `${src.name} has no valid IP address`, "Give the PC an address such as 192.168.1.10/24.");
   if (deviceIps(src).includes(dst)) {
     steps.push({ kind:"deliver", at:srcId, title:"Destination is this PC itself", detail:"Loopback — the packet never leaves the NIC.", links:[] });
     return { ok:true, steps, learned, nat, final:{ srcIp:srcAddr.ip, ...flow } };
@@ -567,13 +570,15 @@ export function trace(topo, srcId, dstIpStr, opts = {}) {
 
   let srcIp = srcAddr.ip;
   const sock = (ip, port) => (flow.proto === "ICMP" ? `${numToIp(ip)} (id ${port})` : `${numToIp(ip)}:${port}`);
-  const l4Text = () => (flow.proto === "ICMP"
-    ? `ICMP ${flow.extra || "echo"} · id ${flow.sport}`
-    : `${flow.proto} ${flow.sport} → ${flow.dport}${flow.extra ? ` ${flow.extra}` : ""}`);
+  const l4Text = () => (flow.inner
+    ? `ICMP ${flow.extra} (about ${flow.inner.proto} port ${flow.inner.port})`
+    : flow.proto === "ICMP"
+      ? `ICMP ${flow.extra || "echo"} · id ${flow.sport}`
+      : `${flow.proto} ${flow.sport} → ${flow.dport}${flow.extra ? ` ${flow.extra}` : ""}`);
 
   let cur = src;
   let ingress = null;
-  let ttl = 64;
+  let ttl = opts.ttl ?? 64;
   for (let guard = 0; guard < 80; guard++) {
     // 1. Decide the next hop and egress interface
     let egress, nh;
@@ -592,8 +597,19 @@ export function trace(topo, srcId, dstIpStr, opts = {}) {
           detail:`${numToIp(dst)} is outside ${netStr(srcAddr)}, so the packet goes to the default gateway.` });
       }
     } else {
-      ttl -= 1;
-      if (ttl <= 0) return fail(cur.id, `${cur.name}: TTL expired — packet dropped`, "The TTL reached 0, which usually means a routing loop. A real router would send back ICMP Time Exceeded.");
+      // A router decrements TTL on packets it forwards, not on ones it originates
+      if (!(cur === src && guard === 0)) {
+        ttl -= 1;
+        if (ttl <= 0) {
+          const inIp = interfaces(cur).find(f => ingress && f.port === ingress.port && f.tag === ingress.tag)?.a.ip ?? null;
+          const r = fail(cur.id, `${cur.name}: TTL reached 0 — packet dropped`, opts.ttl
+            ? `Every router subtracts 1 from TTL. This probe started with TTL ${opts.ttl}, so it dies here and ${cur.name} sends back an ICMP "time exceeded" message from ${inIp !== null ? numToIp(inIp) : "the interface it arrived on"}.`
+            : "The TTL reached 0, which usually means a routing loop. A real router would send back ICMP Time Exceeded.");
+          r.steps.at(-1).kind = opts.ttl ? "expire" : "drop";
+          r.expired = { router:cur.id, ip:inIp, srcIp, sport:flow.sport };
+          return r;
+        }
+      }
       const route = lookup(routingTable(topo, cur), dst);
       if (!route) return fail(cur.id, `${cur.name}: no route to ${numToIp(dst)}`, `Nothing in ${cur.name}'s routing table matches ${numToIp(dst)}. Add a static route (or a default route 0.0.0.0/0).`);
       egress = { port:route.port, tag:route.tag, name:route.iface };
@@ -693,15 +709,23 @@ export function trace(topo, srcId, dstIpStr, opts = {}) {
 
     // 4. Inbound NAT: traffic to a NAT router's public address on its outside interface
     if (tdev.type === "router" && target.tag === null && natRole(tdev, target.port) === "outside" && tIface.a.ip === dst) {
-      const entry = nat.entries.find(e => e.router === tdev.id && e.proto === flow.proto && e.outsideIp === dst && e.outsidePort === flow.dport);
-      if (entry) {
+      // ICMP errors carry the original packet's header, which is what NAT matches on
+      const errEntry = flow.inner && nat.entries.find(e => e.router === tdev.id && e.proto === flow.inner.proto && e.outsideIp === dst && e.outsidePort === flow.inner.port);
+      const entry = errEntry || nat.entries.find(e => e.router === tdev.id && e.proto === flow.proto && e.outsideIp === dst && e.outsidePort === flow.dport);
+      if (errEntry) {
+        steps.push({ kind:"nat", at:tdev.id, links:[],
+          title:`${tdev.name} NAT: ICMP ${flow.extra} → ${numToIp(errEntry.insideIp)}`,
+          detail:`The ICMP message quotes the original ${errEntry.proto} header (port ${errEntry.outsidePort}). ${tdev.name} matches that against its NAT table and forwards the error to ${numToIp(errEntry.insideIp)}, rewriting the quoted port back to ${errEntry.insidePort}.` });
+        dst = errEntry.insideIp;
+        flow.inner = { ...flow.inner, port:errEntry.insidePort };
+      } else if (entry) {
         steps.push({ kind:"nat", at:tdev.id, links:[],
           title:`${tdev.name} NAT: destination ${sock(dst, flow.dport)} → ${sock(entry.insideIp, entry.insidePort)}`,
           detail:`The NAT table says public port ${entry.outsidePort} belongs to ${numToIp(entry.insideIp)}, so ${tdev.name} rewrites the destination and forwards it inside.` });
         dst = entry.insideIp;
         flow.dport = entry.insidePort;
         if (flow.proto === "ICMP") flow.sport = flow.dport;
-      } else if (flow.proto !== "ICMP") {
+      } else if (flow.proto !== "ICMP" && !flow.inner) {
         return fail(tdev.id, `${tdev.name} NAT: no entry for ${flow.proto} port ${flow.dport} — dropped`,
           `Nothing inside started a connection that uses public port ${flow.dport}, so ${tdev.name} has no idea which inside host it's for. This is why hosts behind NAT can't accept unsolicited incoming connections (unless a port forward is configured).`);
       }
@@ -849,6 +873,68 @@ export function webRequest(base, live, leases, pcId, urlStr, nat = emptyNat()) {
     `${pc.name}'s browser renders the page from ${web.name} (${srv}). DHCP, ARP, DNS, TCP and HTTP all had to work for this to happen.`, "deliver");
   stages.push({ name:"HTTP", ok:true });
   return { ok:true, steps, learned, stages, title, serverIp:srv, nat };
+}
+
+// ── Traceroute (Unix style: UDP probes, ICMP replies) ─────────────────────────
+// Probe n has TTL n. Routers where it expires answer "time exceeded" from the
+// interface it arrived on; the destination answers "port unreachable".
+export function traceroute(live, srcId, dstIpStr, nat = emptyNat(), maxHops = 30) {
+  const steps = [], hops = [];
+  const learned = { arp:[], mac:[] };
+  const arpCache = new Set();
+  const src = deviceById(live, srcId);
+  const dst = parseIp(dstIpStr);
+  const absorb = (run, stage) => {
+    run.steps.forEach(s => steps.push({ ...s, stage }));
+    learned.arp.push(...run.learned.arp);
+    learned.mac.push(...run.learned.mac);
+    run.learned.arp.forEach(e => arpCache.add(`${e.dev}|${e.ip}`));
+    return run;
+  };
+  const sends = run => run.steps.filter(s => s.kind === "send").length;
+  const done = (ok, reason) => ({ ok, steps, learned, hops, nat, reason, target:dstIpStr });
+  if (!src || dst === null) return done(false, "Pick a source PC and a destination");
+  const sport = 40000 + src.num;
+
+  for (let ttl = 1; ttl <= maxHops; ttl++) {
+    const stage = `Hop ${ttl}`;
+    const probe = absorb(trace(live, srcId, dstIpStr, {
+      ttl, nat, arpCache, label:`probe (TTL ${ttl})`,
+      flow:{ proto:"UDP", sport, dport:33433 + ttl, extra:`probe · TTL ${ttl}` },
+    }), stage);
+
+    let from, fromIp, extra, final = false;
+    if (probe.expired) {
+      from = deviceById(live, probe.expired.router);
+      fromIp = probe.expired.ip;
+      extra = "time exceeded";
+    } else if (probe.ok) {
+      from = deviceById(live, probe.steps.at(-1).at);
+      fromIp = dst;
+      extra = "port unreachable";
+      final = true;
+    } else {
+      hops.push({ ttl, ip:null, name:null, note:probe.reason });
+      steps.push({ kind:"drop", at:srcId, links:[], stage, title:`Traceroute stops: ${probe.reason}`,
+        detail:"A real traceroute would keep printing * * * for every remaining hop until it gave up." });
+      return done(false, probe.reason);
+    }
+
+    const answer = absorb(trace(live, from.id, numToIp(probe.final?.srcIp ?? probe.expired.srcIp), {
+      srcIp: numToIp(fromIp), nat, arpCache, label:`ICMP ${extra}`,
+      flow:{ proto:"ICMP", sport:0, dport:0, extra, inner:{ proto:"UDP", port:probe.final?.sport ?? probe.expired.sport } },
+    }), stage);
+    const rtt = ((sends(probe) + sends(answer)) * 0.5).toFixed(1);
+    hops.push({ ttl, ip: answer.ok ? numToIp(fromIp) : null, name: answer.ok ? from.name : null, rtt: answer.ok ? rtt : null,
+      note: answer.ok ? null : `${from.name}'s reply was lost: ${answer.reason}` });
+    steps.push({ kind: answer.ok ? "deliver" : "drop", at:srcId, links:[], stage,
+      title: answer.ok ? `Hop ${ttl}: ${numToIp(fromIp)} (${from.name})` : `Hop ${ttl}: * * *`,
+      detail: answer.ok
+        ? `${from.name} answered with ICMP ${extra}${final ? ", so the destination has been reached and traceroute stops." : `. Next probe gets TTL ${ttl + 1}.`}`
+        : `The probe expired at ${from.name}, but its ICMP reply never arrived (${answer.reason}), so traceroute prints * * * for this hop.` });
+    if (final) return done(answer.ok, answer.ok ? `Reached ${dstIpStr} in ${ttl} hop${ttl === 1 ? "" : "s"}` : answer.reason);
+  }
+  return done(false, `Gave up after ${maxHops} hops`);
 }
 
 // ── Learned state (ARP caches, switch MAC tables) ─────────────────────────────

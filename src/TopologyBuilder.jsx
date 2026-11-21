@@ -8,7 +8,7 @@ import {
   applyDhcp, dhcpTrace, poolConfig, parsePool, defaultPool,
   isServer, webRequest, parseUrl,
   routerGraph, dijkstra, distanceVector, linkCost,
-  emptyNat, natRole, natEntriesOf,
+  emptyNat, natRole, natEntriesOf, traceroute,
 } from "./topoEngine.js";
 import "./topology.css";
 
@@ -17,7 +17,7 @@ const VIEW_W = 1000, VIEW_H = 460;
 const TYPE_COLOR = { pc:"#63b3ed", switch:"#42d9b8", router:"#fb923c", server:"#a78bfa" };
 const colorOf = d => (isServer(d) ? TYPE_COLOR.server : TYPE_COLOR[d.type]);
 const STAGES = ["DHCP", "DNS", "TCP", "HTTP"];
-const KIND_ICON = { route:"🧭", arp:"❓", send:"📤", switch:"🔀", arrive:"📥", deliver:"✅", drop:"⛔", nat:"🔁" };
+const KIND_ICON = { route:"🧭", arp:"❓", send:"📤", switch:"🔀", arrive:"📥", deliver:"✅", drop:"⛔", nat:"🔁", expire:"⏱" };
 const VLAN_PALETTE = ["#63b3ed", "#f2c36b", "#a78bfa", "#f472b6", "#4ade80", "#fb923c"];
 const vlanColor = v => (v && v !== NATIVE_VLAN ? VLAN_PALETTE[v % VLAN_PALETTE.length] : null);
 
@@ -108,7 +108,7 @@ export default function TopologyBuilder() {
         if (i >= stepCount - 1) { setPlaying(false); return i; }
         return i + 1;
       });
-    }, result?.kind === "web" ? 550 : 1100);
+    }, result?.kind === "web" || result?.kind === "traceroute" ? 500 : 1100);
     return () => clearInterval(t);
   }, [playing, stepCount, result?.kind]);
 
@@ -231,6 +231,25 @@ export default function TopologyBuilder() {
       reason: run.ok ? `Leased ${numToIp(l.ip)}/${l.prefix}` : `${run.reason} (${numToIp(l.ip)})`,
     }, ...p].slice(0, 50));
     setResult({ fwd: run, rev: null, kind:"dhcp" });
+    setView("fwd"); setSi(0); setPlaying(true);
+  }
+
+  function runTraceroute(fromId = srcId, toIp = dstIp) {
+    const pc = deviceById(live, fromId);
+    if (!pc || !toIp) return;
+    const run = traceroute(live, fromId, toIp, structuredClone(nat));
+    setNat(run.nat);
+    const n = (pings[0]?.n || 0) + 1;
+    setTables(t => mergeLearned(t, run.learned, n));
+    const answered = run.hops.filter(h => h.ip).length;
+    setPings(p => [{
+      n, type:"Trace", time: stamp(), srcId: fromId, dstIp: toIp, tr:true,
+      from: pc.name, to: targets.find(t => t.ip === toIp)?.label || toIp,
+      fwdOk: run.ok, revOk: null, routers: null, ttl: null,
+      reason: `${run.hops.length} hop${run.hops.length === 1 ? "" : "s"}, ${answered} answered · ${run.reason}`,
+    }, ...p].slice(0, 50));
+    setSrc(fromId); setDst(toIp);
+    setResult({ fwd: run, rev: null, kind:"traceroute" });
     setView("fwd"); setSi(0); setPlaying(true);
   }
 
@@ -432,7 +451,7 @@ export default function TopologyBuilder() {
               Routing algorithms
             </button>
           </div>
-          {panel === "log" && <PingLog pings={pings} onReplay={p => (p.web ? runWeb(p.srcId, p.url) : p.dhcp ? runDhcp(p.srcId) : runTrace(p.srcId, p.dstIp))} onClear={() => setPings([])}/>}
+          {panel === "log" && <PingLog pings={pings} onReplay={p => (p.web ? runWeb(p.srcId, p.url) : p.dhcp ? runDhcp(p.srcId) : p.tr ? runTraceroute(p.srcId, p.dstIp) : runTrace(p.srcId, p.dstIp))} onClear={() => setPings([])}/>}
           {panel === "hops" && <HopTable topo={live} run={run} view={view} si={si} vlan={vlanMode}
             onPick={i => { setPlaying(false); setSi(i); }}/>}
           {panel === "tables" && <DeviceTables topo={live} tables={tables} leases={leases} nat={nat}
@@ -462,6 +481,7 @@ export default function TopologyBuilder() {
             <div className="tb-seg" role="tablist" aria-label="Traffic type">
               <button role="tab" aria-selected={sendMode === "web"} className={sendMode === "web" ? "on" : ""} onClick={() => setSendMode("web")}>🌐 Open website</button>
               <button role="tab" aria-selected={sendMode === "ping"} className={sendMode === "ping" ? "on" : ""} onClick={() => setSendMode("ping")}>📶 Ping</button>
+              <button role="tab" aria-selected={sendMode === "trace"} className={sendMode === "trace" ? "on" : ""} onClick={() => setSendMode("trace")}>⏱ Traceroute</button>
             </div>
             <label className="tb-field">From
               <select value={srcId} onChange={e => { setSrc(e.target.value); setResult(null); }}>
@@ -469,14 +489,19 @@ export default function TopologyBuilder() {
                 {pcs.map(p => <option key={p.id} value={p.id}>{p.name} · {p.ports[0].addr || "no IP"}</option>)}
               </select>
             </label>
-            {sendMode === "ping" ? <>
+            {sendMode !== "web" ? <>
               <label className="tb-field">To
                 <select value={dstIp} onChange={e => { setDst(e.target.value); setResult(null); }}>
                   {targets.length === 0 && <option value="">No addressed devices</option>}
                   {targets.map(t => <option key={t.label} value={t.ip}>{t.label}</option>)}
                 </select>
               </label>
-              <button className="tb-run" disabled={!srcId || !dstIp} onClick={() => runTrace()}>▶ Send ping</button>
+              {sendMode === "ping"
+                ? <button className="tb-run" disabled={!srcId || !dstIp} onClick={() => runTrace()}>▶ Send ping</button>
+                : <>
+                    <button className="tb-run" disabled={!srcId || !dstIp} onClick={() => runTraceroute()}>▶ Traceroute</button>
+                    <p className="tb-note">Sends UDP probes with TTL 1, 2, 3… Each router where a probe dies replies “ICMP time exceeded”, revealing the path one hop at a time.</p>
+                  </>}
             </> : <>
               <label className="tb-field">Web address
                 <input value={url} placeholder="www.cs204.edu" onChange={e => setUrl(e.target.value)}
@@ -503,7 +528,23 @@ export default function TopologyBuilder() {
 
             {result && (
               <>
-                {result.kind !== "web" && <div className="tb-verdicts">
+                {result.kind === "traceroute" && (
+                  <div className="tb-term" role="log" aria-label="Traceroute output">
+                    <div>traceroute to {result.fwd.target}, 30 hops max</div>
+                    {result.fwd.hops.map(h => {
+                      const first = result.fwd.steps.findIndex(s => s.stage === `Hop ${h.ttl}`);
+                      return (
+                        <button key={h.ttl} className={`tb-termline${h.ip ? "" : " miss"}`} onClick={() => { setPlaying(false); setSi(first); }}
+                          title={h.note || `Jump to hop ${h.ttl}`}>
+                          <span>{String(h.ttl).padStart(2, " ")}</span>
+                          {h.ip ? `${h.ip} (${h.name})  ${h.rtt} ms` : "* * *"}
+                        </button>
+                      );
+                    })}
+                    {!result.fwd.ok && <div className="tb-termerr">{result.fwd.reason}</div>}
+                  </div>
+                )}
+                {result.kind !== "web" && result.kind !== "traceroute" && <div className="tb-verdicts">
                   <button className={`tb-verdict ${result.fwd.ok ? "ok" : "bad"}${view === "fwd" ? " on" : ""}`}
                     onClick={() => { setView("fwd"); setSi(0); setPlaying(false); }}>
                     {result.fwd.ok ? "✓" : "✗"} {result.kind === "dhcp" ? "DHCP lease" : "Request"}
@@ -830,11 +871,11 @@ function PingLog({ pings, onReplay, onClear }) {
                 <td className="mono">{p.time}</td>
                 <td>{p.from}</td>
                 <td>{p.to}</td>
-                <td className={p.fwdOk ? "ok" : "bad"}>{p.web ? (p.fwdOk ? "✓ loaded" : "✗ failed") : p.dhcp ? (p.fwdOk ? "✓ leased" : "✗ no offer") : p.fwdOk ? "✓ arrived" : "✗ dropped"}</td>
+                <td className={p.fwdOk ? "ok" : "bad"}>{p.tr ? (p.fwdOk ? "✓ reached" : "✗ incomplete") : p.web ? (p.fwdOk ? "✓ loaded" : "✗ failed") : p.dhcp ? (p.fwdOk ? "✓ leased" : "✗ no offer") : p.fwdOk ? "✓ arrived" : "✗ dropped"}</td>
                 <td className={p.revOk === null ? "" : p.revOk ? "ok" : "bad"}>{p.revOk === null ? "—" : p.revOk ? "✓ arrived" : "✗ dropped"}</td>
                 <td>{p.fwdOk && p.routers !== null ? p.routers : "—"}</td>
                 <td>{p.ttl ?? "—"}</td>
-                <td className={p.fwdOk && (p.dhcp || p.web || !p.reason) ? "" : "bad"}>{p.reason || (p.revOk ? "Delivered both ways" : "Delivered")}</td>
+                <td className={p.fwdOk && (p.dhcp || p.web || p.tr || !p.reason) ? "" : "bad"}>{p.reason || (p.revOk ? "Delivered both ways" : "Delivered")}</td>
               </tr>
             ))}
           </tbody>
