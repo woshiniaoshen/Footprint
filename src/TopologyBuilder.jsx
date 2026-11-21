@@ -7,6 +7,7 @@ import {
   emptyTables, mergeLearned, arpTableOf, macTableOf,
   applyDhcp, dhcpTrace, poolConfig, parsePool, defaultPool,
   isServer, webRequest, parseUrl,
+  routerGraph, dijkstra, distanceVector, linkCost,
 } from "./topoEngine.js";
 import "./topology.css";
 
@@ -64,6 +65,7 @@ export default function TopologyBuilder() {
   const [panel, setPanel]     = useState("log");
   const [sendMode, setSendMode] = useState("web");
   const [url, setUrl]         = useState("www.cs204.edu");
+  const [algo, setAlgo]       = useState({ kind:"dijkstra", src:"", iter:0 });
   const svgRef  = useRef(null);
   const drag    = useRef(null);
   const listRef = useRef(null);
@@ -86,6 +88,12 @@ export default function TopologyBuilder() {
   const vlanMode = usesVlans(live);
   const srcId = pcs.some(p => p.id === src) ? src : pcs[0]?.id || "";
   const dstIp = targets.some(t => t.ip === dst) ? dst : targets.filter(t => !deviceIps(deviceById(live, srcId) || { ports:[] }).map(numToIp).includes(t.ip)).at(-1)?.ip || "";
+
+  const graph   = useMemo(() => routerGraph(live), [live]);
+  const algoSrc = graph.nodes.includes(algo.src) ? algo.src : graph.nodes[0] || "";
+  const dj      = useMemo(() => dijkstra(graph, algoSrc), [graph, algoSrc]);
+  const dv      = useMemo(() => distanceVector(graph), [graph]);
+  const treeLinks = new Set(panel === "routing" && algo.kind === "dijkstra" ? dj.treeEdges.map(e => e.id) : []);
 
   const run    = result ? result[view] : null;
   const step   = run?.steps[Math.min(si, run.steps.length - 1)];
@@ -299,7 +307,9 @@ export default function TopologyBuilder() {
                 return sp.mode === "access" ? sp.vlan : null;
               }).find(v => v !== null);
               const idle = !vlanMode ? "rgba(255,255,255,0.22)" : trunk ? "rgba(241,245,249,0.45)" : vlanColor(accessVlan) ? `${vlanColor(accessVlan)}aa` : "rgba(255,255,255,0.22)";
-              const stroke = picked ? "#f2c36b" : hot ? "#42d9b8" : idle;
+              const inTree = treeLinks.has(l.id);
+              const stroke = picked ? "#f2c36b" : hot ? "#42d9b8" : inTree ? "#a78bfa" : idle;
+              const routerLink = a.type === "router" && b.type === "router";
               const lbl = (from, to, port) => {
                 const len = Math.hypot(to.x - from.x, to.y - from.y) || 1;
                 const k = Math.min(0.42, 40 / len);
@@ -314,7 +324,15 @@ export default function TopologyBuilder() {
                     <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#111827" strokeWidth={hot || picked ? 2.5 : 2}/>
                     <text x={(a.x + b.x) / 2} y={(a.y + b.y) / 2 - 7} className="tb-trunklbl" textAnchor="middle">802.1Q</text>
                   </> : (
-                    <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={stroke} strokeWidth={hot || picked ? 3 : 1.8}/>
+                    <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={stroke} strokeWidth={hot || picked ? 3 : inTree ? 3.5 : 1.8}/>
+                  )}
+                  {routerLink && (
+                    <g>
+                      <rect x={(a.x + b.x) / 2 - 11} y={(a.y + b.y) / 2 - 8} width={22} height={14} rx={7}
+                        fill="#0d1520" stroke={inTree ? "#a78bfa" : "rgba(255,255,255,0.25)"}/>
+                      <text x={(a.x + b.x) / 2} y={(a.y + b.y) / 2 + 2.5} textAnchor="middle" className="tb-costlbl"
+                        style={inTree ? { fill:"#a78bfa" } : undefined}>{linkCost(l)}</text>
+                    </g>
                   )}
                   {lbl(a, b, l.a.port)}
                   {lbl(b, a, l.b.port)}
@@ -347,7 +365,10 @@ export default function TopologyBuilder() {
                       {[d.services.web && "web :80", d.services.dns && "dns :53"].filter(Boolean).join(" · ")}
                     </text>
                   )}
-                  {d.type === "router" && ifs.map((f, k) => (
+                  {d.type === "router" && ifs.length > 2 && (
+                    <text x={d.x} y={d.y + 50} textAnchor="middle" className="tb-devip">{ifs.length} interfaces · click for details</text>
+                  )}
+                  {d.type === "router" && ifs.length <= 2 && ifs.map((f, k) => (
                     <text key={f.name} x={d.x} y={d.y + 50 + k * 11} textAnchor="middle" className="tb-devip"
                       style={vlanColor(f.tag) ? { fill:vlanColor(f.tag) } : undefined}>
                       {f.name} {numToIp(f.a.ip)}/{f.a.prefix}{poolConfig(d, f) ? " · DHCP" : ""}
@@ -391,12 +412,17 @@ export default function TopologyBuilder() {
             <button role="tab" aria-selected={panel === "tables"} className={panel === "tables" ? "on" : ""} onClick={() => setPanel("tables")}>
               Device tables
             </button>
+            <button role="tab" aria-selected={panel === "routing"} className={panel === "routing" ? "on" : ""} onClick={() => setPanel("routing")}>
+              Routing algorithms
+            </button>
           </div>
           {panel === "log" && <PingLog pings={pings} onReplay={p => (p.web ? runWeb(p.srcId, p.url) : p.dhcp ? runDhcp(p.srcId) : runTrace(p.srcId, p.dstIp))} onClear={() => setPings([])}/>}
           {panel === "hops" && <HopTable topo={live} run={run} view={view} si={si}
             onPick={i => { setPlaying(false); setSi(i); }}/>}
           {panel === "tables" && <DeviceTables topo={live} tables={tables} leases={leases}
             onPick={id => setSel({ kind:"dev", id })} onClear={() => setTables(emptyTables())}/>}
+          {panel === "routing" && <RoutingPanel graph={graph} algo={{ ...algo, src:algoSrc }} setAlgo={setAlgo} dj={dj} dv={dv}
+            dynamic={!!topo.dynamic} onDynamic={on => edit(t => { t.dynamic = on; })}/>}
         </div>
         </div>
 
@@ -413,7 +439,7 @@ export default function TopologyBuilder() {
           )}
 
           {selDev && <Inspector d={selDev} topo={topo} live={live} edit={edit} onDhcp={runDhcp}/>}
-          {selLink && <LinkInspector l={selLink} topo={topo} onDelete={deleteSelected}/>}
+          {selLink && <LinkInspector l={selLink} topo={topo} edit={edit} onDelete={deleteSelected}/>}
 
           <div className="tb-card">
             <div className="tb-card-title">📦 Send traffic</div>
@@ -941,12 +967,150 @@ function DeviceTables({ topo, tables, leases, onPick, onClear }) {
   );
 }
 
-function LinkInspector({ l, topo, onDelete }) {
+function LinkInspector({ l, topo, edit, onDelete }) {
+  const routers = deviceById(topo, l.a.dev)?.type === "router" && deviceById(topo, l.b.dev)?.type === "router";
+  const raw = l.cost ?? "";
   return (
     <div className="tb-card">
       <div className="tb-card-title">🔌 Cable</div>
       <p className="tb-note">{portLabel(topo, l.a)} ↔ {portLabel(topo, l.b)}</p>
+      {routers && <>
+        <Field label="Link cost (used by Dijkstra and distance vector)" value={String(raw)} placeholder="1"
+          onChange={v => edit(t => { t.links.find(x => x.id === l.id).cost = v; })}
+          check={raw !== "" && String(linkCost(l)) !== String(raw).trim() ? { error:"Whole number from 1 to 9999" } : null}/>
+        <p className="tb-note">Lower cost = preferred. Real OSPF often derives cost from bandwidth (e.g. 100 Mbps ÷ link speed).</p>
+      </>}
       <button className="tb-btn tb-danger" onClick={onDelete}>Remove cable</button>
     </div>
+  );
+}
+
+const fmtCost = v => (v === Infinity ? "∞" : v);
+
+function RoutingPanel({ graph, algo, setAlgo, dj, dv, dynamic, onDynamic }) {
+  const name = id => graph.names[id] ?? "?";
+  const join = ids => (ids.every(id => name(id).length === 1) ? ids.map(name).join("") : ids.map(name).join(", "));
+  if (graph.nodes.length < 2 || !graph.edges.length) {
+    return <p className="tb-note">Add two or more routers and cable them to each other — the algorithms run on the router-to-router links and their costs. Try the “Routing: Dijkstra example” preset.</p>;
+  }
+  const others = graph.nodes.filter(n => n !== algo.src);
+  const iters = dv.iterations;
+  const k = Math.min(algo.iter, iters.length - 1);
+  const it = iters[k];
+  const changed = new Set(it.changed.map(c => `${c.x}|${c.y}`));
+  const pathTo = dest => {
+    const p = [dest];
+    while (dj.P[p[0]] !== null && p[0] !== algo.src) p.unshift(dj.P[p[0]]);
+    return p[0] === algo.src ? p : null;
+  };
+
+  return (
+    <>
+      <div className="tb-panelbar">
+        <select value={algo.kind} onChange={e => setAlgo(a => ({ ...a, kind:e.target.value }))}>
+          <option value="dijkstra">Dijkstra (link state)</option>
+          <option value="dv">Distance vector (Bellman-Ford)</option>
+        </select>
+        {algo.kind === "dijkstra" && (
+          <select value={algo.src} onChange={e => setAlgo(a => ({ ...a, src:e.target.value }))} aria-label="Source router">
+            {graph.nodes.map(n => <option key={n} value={n}>Source: {name(n)}</option>)}
+          </select>
+        )}
+        <label className="tb-check tb-dyn">
+          <input type="checkbox" checked={dynamic} onChange={e => onDynamic(e.target.checked)}/>
+          Fill every router's routing table automatically (link state, like OSPF)
+        </label>
+      </div>
+
+      {algo.kind === "dijkstra" && <>
+        <p className="tb-note">
+          Each step adds the router with the lowest D(·) not yet in N′, then updates its neighbours: D(b) = min(D(b), D(a) + c(a,b)).
+          The purple cell is the one chosen next; yellow cells changed in that step. Purple cables on the canvas form the least-cost tree from {name(algo.src)}.
+        </p>
+        <div className="tb-tablewrap">
+          <table className="tb-grid tb-algo">
+            <thead>
+              <tr><th>Step</th><th>N′</th>{others.map(n => <th key={n}>D({name(n)}), p({name(n)})</th>)}</tr>
+            </thead>
+            <tbody>
+              {dj.steps.map((s, i) => {
+                const prev = dj.steps[i - 1];
+                const next = dj.steps[i + 1]?.added;
+                return (
+                  <tr key={i}>
+                    <td>{i}</td>
+                    <td className="mono">{join(s.N)}</td>
+                    {others.map(n => {
+                      if (s.N.includes(n)) return <td key={n}></td>;
+                      const upd = prev && (prev.D[n] !== s.D[n] || prev.P[n] !== s.P[n]);
+                      return (
+                        <td key={n} className={`mono${n === next ? " pick" : upd ? " chg" : ""}`}>
+                          {s.D[n] === Infinity ? "∞" : `${s.D[n]}, ${name(s.P[n])}`}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div className="tb-subtitle tb-pad">Resulting forwarding table in {name(algo.src)}</div>
+        <div className="tb-tablewrap">
+          <table className="tb-grid">
+            <thead><tr><th>Destination</th><th>Cost</th><th>Least-cost path</th><th>Outgoing link</th></tr></thead>
+            <tbody>
+              {others.map(n => {
+                const p = pathTo(n);
+                const hop = dj.firstHop(n);
+                return (
+                  <tr key={n}>
+                    <td>{name(n)}</td>
+                    <td>{fmtCost(dj.D[n])}</td>
+                    <td className="mono">{p ? p.map(name).join(" → ") : "unreachable"}</td>
+                    <td className="mono">{hop ? `(${name(algo.src)}, ${name(hop)})` : "—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </>}
+
+      {algo.kind === "dv" && <>
+        <p className="tb-note">
+          Every router starts knowing only its neighbours. Each iteration, every router receives its neighbours' vectors and applies Bellman-Ford:
+          D<sub>x</sub>(y) = min<sub>v</sub> {"{"} c(x,v) + D<sub>v</sub>(y) {"}"}. Highlighted cells changed in this iteration; the small name is the next hop.
+        </p>
+        <div className="tb-panelbar">
+          <button onClick={() => setAlgo(a => ({ ...a, iter:Math.max(0, k - 1) }))} disabled={k === 0}>◀ Previous</button>
+          <span>
+            {k === 0 ? "t = 0 · neighbours only" : `t = ${k} · ${it.changed.length} change${it.changed.length === 1 ? "" : "s"}`}
+            {k === iters.length - 1 && (dv.converged ? " · converged — nothing changed, so routers stop sending updates" : " · not yet converged")}
+          </span>
+          <button onClick={() => setAlgo(a => ({ ...a, iter:Math.min(iters.length - 1, k + 1) }))} disabled={k === iters.length - 1}>Next ▶</button>
+        </div>
+        <div className="tb-tablewrap">
+          <table className="tb-grid tb-algo tb-dv">
+            <thead>
+              <tr><th>From \ to</th>{graph.nodes.map(y => <th key={y}>{name(y)}</th>)}</tr>
+            </thead>
+            <tbody>
+              {graph.nodes.map(x => (
+                <tr key={x}>
+                  <td><b>D<sub>{name(x)}</sub></b></td>
+                  {graph.nodes.map(y => (
+                    <td key={y} className={`mono${changed.has(`${x}|${y}`) ? " chg" : ""}${x === y ? " self" : ""}`}>
+                      {fmtCost(it.V[x][y])}
+                      {x !== y && it.NH[x][y] && <small> via {name(it.NH[x][y])}</small>}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </>}
+    </>
   );
 }

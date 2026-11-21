@@ -155,6 +155,16 @@
 .tb-steplist li.future { opacity: 0.45; }
 .tb-steplist li.k-drop { color: #e63946; }
 
+/* ── Routing algorithms ── */
+.tb-costlbl { font-size: 8.5px; font-weight: 700; fill: rgba(241,245,249,0.75); font-family: 'JetBrains Mono', monospace; pointer-events: none; }
+.tb-algo td.pick { background: rgba(167,139,250,0.2); color: #c4b5fd; font-weight: 700; }
+.tb-algo td.self { color: var(--quiet); }
+.tb-dv td small { color: var(--quiet); font-size: 9px; margin-left: 2px; }
+.tb-dv td.chg small { color: #f2c36b; }
+.tb-dyn { flex: 1; min-width: 240px; color: var(--muted); }
+.tb-pad { margin: 12px 14px 0; }
+.tb-panelbar > button + span { text-align: center; }
+
 /* ── Web request (day in the life) ── */
 .tb-stages { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-top: 10px; }
 .tb-stage {

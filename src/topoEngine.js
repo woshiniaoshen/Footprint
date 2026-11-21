@@ -73,7 +73,7 @@ export function switchPort(p) {
 const allows = (sp, v) => !sp.allowed.set || sp.allowed.set.has(v);
 
 // ── Devices, ports, links ─────────────────────────────────────────────────────
-export const PORT_COUNT = { pc:1, switch:8, router:4 };
+export const PORT_COUNT = { pc:1, switch:8, router:6 };
 const NAME_PREFIX = { pc:"PC", switch:"SW", router:"R" };
 const TYPE_BYTE   = { pc:"0A", switch:"0B", router:"0C" };
 const hex2 = n => (n & 255).toString(16).toUpperCase().padStart(2, "0");
@@ -388,6 +388,127 @@ export function dhcpTrace(topo, leases, pcId) {
   return { ok:true, steps, learned };
 }
 
+// ── Routing algorithms (link state and distance vector) ───────────────────────
+export function linkCost(l) {
+  const c = Number(l?.cost);
+  return Number.isInteger(c) && c >= 1 && c <= 9999 ? c : 1;
+}
+
+// Routers and the router-to-router cables between them. An edge is "usable" for
+// forwarding when both ends have IPs on the same subnet (needed for a next hop).
+export function routerGraph(topo) {
+  const routers = topo.devices.filter(d => d.type === "router").sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric:true }));
+  const edges = topo.links.map(l => {
+    const a = deviceById(topo, l.a.dev), b = deviceById(topo, l.b.dev);
+    if (a?.type !== "router" || b?.type !== "router") return null;
+    const aA = portAddr(a, l.a.port), bA = portAddr(b, l.b.port);
+    return { id:l.id, a:a.id, b:b.id, aPort:l.a.port, bPort:l.b.port, cost:linkCost(l),
+      aIp:aA?.ip ?? null, bIp:bA?.ip ?? null, usable: !!(aA && bA && aA.net === bA.net && aA.prefix === bA.prefix) };
+  }).filter(Boolean);
+  return { nodes: routers.map(r => r.id), names: Object.fromEntries(routers.map(r => [r.id, r.name])), edges };
+}
+
+// Cheapest edge between two routers (parallel cables are allowed)
+function bestEdge(g, x, y, usableOnly) {
+  return g.edges
+    .filter(e => ((e.a === x && e.b === y) || (e.a === y && e.b === x)) && (!usableOnly || e.usable))
+    .sort((p, q) => p.cost - q.cost)[0] || null;
+}
+const neighborsOf = (g, x, usableOnly) =>
+  [...new Set(g.edges.filter(e => (e.a === x || e.b === x) && (!usableOnly || e.usable)).map(e => (e.a === x ? e.b : e.a)))]
+    .map(v => ({ v, cost: bestEdge(g, x, v, usableOnly).cost }));
+
+// Dijkstra as in Kurose & Ross §5.2.1: one table row per step. Ties go to the node reached
+// through the most recently added router (then by name), which reproduces the lecture's table.
+export function dijkstra(g, src, usableOnly = false) {
+  const D = {}, P = {};
+  g.nodes.forEach(n => { D[n] = Infinity; P[n] = null; });
+  if (!g.nodes.includes(src)) return { steps:[], D, P, src, firstHop:() => null, treeEdges:[] };
+  D[src] = 0;
+  neighborsOf(g, src, usableOnly).forEach(({ v, cost }) => { D[v] = cost; P[v] = src; });
+  const N = [src];
+  const steps = [{ added:src, N:[...N], D:{ ...D }, P:{ ...P } }];
+  while (N.length < g.nodes.length) {
+    const w = g.nodes.filter(n => !N.includes(n) && D[n] < Infinity)
+      .sort((a, b) => D[a] - D[b] || N.indexOf(P[b]) - N.indexOf(P[a])
+        || g.names[a].localeCompare(g.names[b], undefined, { numeric:true }))[0];
+    if (!w) break;
+    N.push(w);
+    neighborsOf(g, w, usableOnly).forEach(({ v, cost }) => {
+      if (!N.includes(v) && D[w] + cost < D[v]) { D[v] = D[w] + cost; P[v] = w; }
+    });
+    steps.push({ added:w, N:[...N], D:{ ...D }, P:{ ...P } });
+  }
+  const firstHop = dest => {
+    if (dest === src || P[dest] === null) return null;
+    let v = dest;
+    while (P[v] !== src) v = P[v];
+    return v;
+  };
+  const treeEdges = g.nodes.filter(v => v !== src && P[v] !== null).map(v => bestEdge(g, P[v], v, usableOnly)).filter(Boolean);
+  return { steps, D, P, src, firstHop, treeEdges };
+}
+
+// Synchronous Bellman-Ford distance vector: every router updates from its
+// neighbours' previous vectors each iteration, until nothing changes.
+export function distanceVector(g, usableOnly = false) {
+  const nodes = g.nodes;
+  const c = (x, y) => (x === y ? 0 : bestEdge(g, x, y, usableOnly)?.cost ?? Infinity);
+  let V = {}, NH = {};
+  nodes.forEach(x => {
+    V[x] = {}; NH[x] = {};
+    nodes.forEach(y => { V[x][y] = c(x, y); NH[x][y] = x === y ? x : V[x][y] < Infinity ? y : null; });
+  });
+  const iterations = [{ V:structuredClone(V), NH:structuredClone(NH), changed:[] }];
+  for (let k = 1; k <= nodes.length + 1; k++) {
+    const nV = {}, nNH = {}, changed = [];
+    nodes.forEach(x => {
+      nV[x] = {}; nNH[x] = {};
+      const nbs = neighborsOf(g, x, usableOnly);
+      nodes.forEach(y => {
+        if (x === y) { nV[x][y] = 0; nNH[x][y] = x; return; }
+        let best = Infinity, via = null;
+        for (const { v, cost } of nbs) {
+          const viaCost = cost + V[v][y];
+          if (viaCost < best || (viaCost === best && via !== null && g.names[v].localeCompare(g.names[via], undefined, { numeric:true }) < 0)) { best = viaCost; via = v; }
+        }
+        nV[x][y] = best; nNH[x][y] = best < Infinity ? via : null;
+        if (best !== V[x][y]) changed.push({ x, y });
+      });
+    });
+    V = nV; NH = nNH;
+    iterations.push({ V:structuredClone(V), NH:structuredClone(NH), changed });
+    if (!changed.length) break;
+  }
+  return { iterations, converged: !iterations.at(-1).changed.length };
+}
+
+// Routes a router learns from link-state routing ("O" like OSPF), cheapest path wins
+function linkStateRoutes(topo, r) {
+  const g = routerGraph(topo);
+  const dj = dijkstra(g, r.id, true);
+  const own = interfaces(r).filter(f => linkAt(topo, r.id, f.port));
+  const best = new Map();
+  for (const t of g.nodes) {
+    if (t === r.id || dj.D[t] === Infinity) continue;
+    const hop = dj.firstHop(t);
+    const e = bestEdge(g, r.id, hop, true);
+    if (!e) continue;
+    const myPort = e.a === r.id ? e.aPort : e.bPort;
+    const via = e.a === r.id ? e.bIp : e.aIp;
+    const target = deviceById(topo, t);
+    for (const f of interfaces(target)) {
+      if (!linkAt(topo, t, f.port)) continue;
+      if (own.some(o => o.a.net === f.a.net && o.a.prefix === f.a.prefix)) continue;
+      const key = `${f.a.net}/${f.a.prefix}`;
+      if (best.has(key) && best.get(key).metric <= dj.D[t]) continue;
+      best.set(key, { net:f.a.net, prefix:f.a.prefix, mask:f.a.mask, port:myPort, tag:null,
+        iface:portName("router", myPort), via, type:"O", metric:dj.D[t] });
+    }
+  }
+  return [...best.values()].sort((a, b) => a.net - b.net);
+}
+
 // ── Routing ───────────────────────────────────────────────────────────────────
 export function routingTable(topo, r) {
   const rows = [];
@@ -401,6 +522,8 @@ export function routingTable(topo, r) {
     const conn = rows.find(x => x.type === "C" && inNet(via, x));
     rows.push({ ...n, port: conn ? conn.port : null, tag: conn ? conn.tag : null, iface: conn ? conn.iface : null, via, type:"S" });
   });
+  // Static routes are listed first so they win ties, like their lower administrative distance
+  if (topo.dynamic) rows.push(...linkStateRoutes(topo, r));
   return rows;
 }
 
@@ -465,7 +588,9 @@ export function trace(topo, srcId, dstIpStr, opts = {}) {
         title:`${cur.name}: route ${numToIp(route.net)}/${route.prefix} → out ${route.iface}`,
         detail: (route.type === "C"
           ? `Longest match is the directly connected network on ${route.iface}. TTL ${ttl + 1} → ${ttl}.`
-          : `Longest match is a static route via ${numToIp(route.via)} on ${route.iface}. TTL ${ttl + 1} → ${ttl}.`) + sub });
+          : route.type === "O"
+            ? `Longest match is a link-state route (cost ${route.metric}) computed by Dijkstra; next hop ${numToIp(route.via)} on ${route.iface}. TTL ${ttl + 1} → ${ttl}.`
+            : `Longest match is a static route via ${numToIp(route.via)} on ${route.iface}. TTL ${ttl + 1} → ${ttl}.`) + sub });
     }
 
     // 2. ARP for the next hop on the egress segment (only within the egress VLAN)
@@ -770,6 +895,15 @@ export function problems(topo) {
     }
   }
 
+  for (const l of topo.links) {
+    if (l.cost !== undefined && String(l.cost).trim() !== "" && String(linkCost(l)) !== String(l.cost).trim())
+      add("error", l.a.dev, `Cable ${portLabel(topo, l.a)} ↔ ${portLabel(topo, l.b)}: cost must be a whole number from 1 to 9999`);
+  }
+  if (topo.dynamic) {
+    routerGraph(topo).edges.filter(e => !e.usable).forEach(e => add("warn", e.a,
+      `${deviceById(topo, e.a).name}–${deviceById(topo, e.b).name} cable needs IPs on the same subnet at both ends before link-state routing can use it`));
+  }
+
   // Trunk on one end, access port or PC on the other
   for (const l of topo.links) {
     for (const [x, y] of [[l.a, l.b], [l.b, l.a]]) {
@@ -823,8 +957,31 @@ function build(spec) {
     Object.entries(cfg.sw || {}).forEach(([i, p]) => { Object.assign(d.ports[i], p); });
     topo.devices.push(d);
   }
-  spec.links.forEach(([a, pa, b, pb], i) => topo.links.push({ id:`l${i + 1}`, a:{ dev:a, port:pa }, b:{ dev:b, port:pb } }));
+  spec.links.forEach(([a, pa, b, pb, cost], i) =>
+    topo.links.push({ id:`l${i + 1}`, a:{ dev:a, port:pa }, b:{ dev:b, port:pb }, ...(cost ? { cost:String(cost) } : {}) }));
+  if (spec.dynamic) topo.dynamic = true;
   return topo;
+}
+
+// Routers wired point-to-point with /30 transit links, plus one PC LAN per entry in `lans`
+function routerLab({ routers, edges, lans }) {
+  const num = Object.fromEntries(routers.map(([n], i) => [n, i + 1]));
+  const addrs = Object.fromEntries(routers.map(([n]) => [n, []]));
+  const devices = [], links = [];
+  edges.forEach(([a, b, cost], k) => {
+    const pa = addrs[a].length, pb = addrs[b].length;
+    addrs[a].push(`10.0.${k + 1}.1/30`);
+    addrs[b].push(`10.0.${k + 1}.2/30`);
+    links.push([`router${num[a]}`, pa, `router${num[b]}`, pb, cost]);
+  });
+  lans.forEach(([r, pcName, x, y, third], j) => {
+    const p = addrs[r].length;
+    addrs[r].push(`192.168.${third}.1/24`);
+    devices.push(["pc", j + 1, x, y, { name:pcName, addrs:[`192.168.${third}.10/24`], gw:`192.168.${third}.1` }]);
+    links.push([`pc${j + 1}`, 0, `router${num[r]}`, p]);
+  });
+  routers.forEach(([n, x, y]) => devices.push(["router", num[n], x, y, { name:n, addrs:addrs[n] }]));
+  return { devices, links, dynamic:true };
 }
 
 const THREE_ROUTERS = withReturnRoute => ({
@@ -899,6 +1056,18 @@ export const PRESETS = [
     build: () => build(DAY_IN_LIFE("10.0.3.80")) },
   { id:"webpuzzle", name:"Puzzle: the page won't load", hint:"The Laptop gets an address and DNS answers, but www.cs204.edu still won't load. Follow the trace to find out why.",
     build: () => build(DAY_IN_LIFE("10.0.3.81")) },
+  { id:"dijkstra", name:"Routing: Dijkstra example (lecture)", hint:"The u–z network from the Dijkstra slides. Open the Routing algorithms tab and pick u as the source.",
+    build: () => build(routerLab({
+      routers: [["u", 150, 230], ["v", 340, 110], ["x", 340, 350], ["w", 560, 110], ["y", 560, 350], ["z", 760, 230]],
+      edges: [["u", "v", 2], ["u", "x", 1], ["u", "w", 5], ["v", "x", 2], ["v", "w", 3], ["x", "w", 3], ["x", "y", 1], ["w", "y", 1], ["w", "z", 5], ["y", "z", 2]],
+      lans: [["u", "PC-u", 60, 380, 1], ["z", "PC-z", 900, 380, 2]],
+    })) },
+  { id:"dv", name:"Routing: distance vector example (lecture)", hint:"The a–i grid from the distance-vector slides: every link costs 1 except a–b (8), and there's no c–f link.",
+    build: () => build(routerLab({
+      routers: [["a", 200, 80], ["b", 450, 80], ["c", 700, 80], ["d", 200, 220], ["e", 450, 220], ["f", 700, 220], ["g", 200, 360], ["h", 450, 360], ["i", 700, 360]],
+      edges: [["a", "b", 8], ["b", "c", 1], ["a", "d", 1], ["b", "e", 1], ["d", "e", 1], ["e", "f", 1], ["d", "g", 1], ["e", "h", 1], ["f", "i", 1], ["g", "h", 1], ["h", "i", 1]],
+      lans: [["a", "PC-a", 60, 80, 1], ["c", "PC-c", 880, 80, 3]],
+    })) },
   { id:"classic", name:"Two LANs, one router", hint:"The guided walkthrough's network",
     build: () => build({
       devices: [
