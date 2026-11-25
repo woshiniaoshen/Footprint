@@ -10,15 +10,18 @@ export const PROTOCOLS = {
   rdt30: { name:"rdt3.0", full:"rdt3.0 — stop-and-wait with a timer", pipelined:false, timer:true },
   gbn:   { name:"Go-Back-N", full:"Go-Back-N — cumulative ACKs, one timer", pipelined:true, timer:true },
   sr:    { name:"Selective Repeat", full:"Selective Repeat — individual ACKs, a timer per packet", pipelined:true, timer:true },
+  tcp:   { name:"TCP", full:"TCP — byte sequence numbers, cumulative ACKs, fast retransmit", pipelined:true, timer:true, tcp:true },
 };
 
-export const DEFAULTS = { packets:6, window:4, timeout:3, D:1, dt:0.25 };
+export const DEFAULTS = { packets:6, window:4, timeout:3, D:1, dt:0.25, mss:100, isn:100 };
 
 export function nextFault(f) { return f === "lost" ? "corrupt" : f === "corrupt" ? undefined : "lost"; }
 
 export function simulate({ protocol, packets = DEFAULTS.packets, window = DEFAULTS.window, timeout = DEFAULTS.timeout,
-  faults = {}, D = DEFAULTS.D, dt = DEFAULTS.dt, tMax = 80 }) {
-  const M = packets;
+  faults = {}, D = DEFAULTS.D, dt = DEFAULTS.dt, tMax = 80,
+  sizes = null, mss = DEFAULTS.mss, isn = DEFAULTS.isn, fastRetransmit = true }) {
+  const segSizes = protocol === "tcp" ? (sizes?.length ? sizes : Array(packets).fill(mss)) : null;
+  const M = segSizes ? segSizes.length : packets;
   const N = PROTOCOLS[protocol]?.pipelined ? Math.max(1, window) : 1;
   const dtAck = 0.05;
   const txs = [], sNotes = [], rNotes = [], deliveries = [], snaps = [];
@@ -63,7 +66,7 @@ export function simulate({ protocol, packets = DEFAULTS.packets, window = DEFAUL
   const startTimer = (t, id = "only") => {
     const token = (timers[id]?.token || 0) + 1;
     timers[id] = { token, running:true, start:t };
-    schedule(t + timeout, now => { if (timers[id]?.token === token && timers[id].running) onTimeout(now, id); });
+    schedule(t + timeout, now => { if (!S.done && timers[id]?.token === token && timers[id].running) onTimeout(now, id); });
   };
   const stopTimer = id => { if (timers[id]) timers[id].running = false; };
   let onTimeout = () => {};
@@ -85,7 +88,7 @@ export function simulate({ protocol, packets = DEFAULTS.packets, window = DEFAUL
       S.base += 1;
       S.next = S.base;
       snap(t);
-      if (S.base >= M) { S.done = true; sNote(t, "all messages acknowledged", "good"); }
+      if (S.base >= M) { S.done = true; S.doneAt = t; sNote(t, "all messages acknowledged", "good"); }
       else sendCur(t, false);
     };
     let expect = 0; // rdt2.1 / 3.0 receiver: expected sequence bit
@@ -172,7 +175,7 @@ export function simulate({ protocol, packets = DEFAULTS.packets, window = DEFAUL
       sNote(t, `got ${tx.label} → base = ${S.base}`, "good");
       if (S.base === S.next) stopTimer("only"); else startTimer(t);
       snap(t);
-      if (S.base >= M) { S.done = true; sNote(t, "all packets acknowledged", "good"); return; }
+      if (S.base >= M) { S.done = true; S.doneAt = t; sNote(t, "all packets acknowledged", "good"); return; }
       trySend(t);
     };
     recv = (tx, t) => {
@@ -223,7 +226,7 @@ export function simulate({ protocol, packets = DEFAULTS.packets, window = DEFAUL
       while (S.acked.has(S.base)) S.base += 1;
       sNote(t, S.base !== before ? `got ${tx.label} → window slides to ${S.base}` : `got ${tx.label} — marked, window waits for pkt${S.base}`, S.base !== before ? "good" : "info");
       snap(t);
-      if (S.base >= M) { S.done = true; sNote(t, "all packets acknowledged", "good"); return; }
+      if (S.base >= M) { S.done = true; S.doneAt = t; sNote(t, "all packets acknowledged", "good"); return; }
       trySend(t);
     };
     recv = (tx, t) => {
@@ -254,11 +257,85 @@ export function simulate({ protocol, packets = DEFAULTS.packets, window = DEFAUL
       sendOne(t, k, true);
     };
     trySend(0);
+  } else if (protocol === "tcp") {
+    // ── TCP (Kurose §3.5.4): byte sequence numbers, cumulative ACKs, one timer, fast retransmit ──
+    const seqs = [];
+    segSizes.reduce((acc, size, i) => { seqs[i] = acc; return acc + size; }, isn);
+    const endOf = i => seqs[i] + segSizes[i];
+    const label = i => `Seq=${seqs[i]}, ${segSizes[i]} B`;
+    let dupCount = 0;
+    const sendSeg = (t, i, why) => {
+      const at = slot(t);
+      transmit("S", "data", i, seqs[i], at, label(i));
+      if (why) sNote(at, why, why.startsWith("fast") ? "warn" : "bad");
+      return at;
+    };
+    const trySend = t => {
+      while (S.next < S.base + N && S.next < M) {
+        const at = sendSeg(t, S.next);
+        if (!timers.only?.running) startTimer(at);
+        S.next += 1;
+        snap(at);
+      }
+    };
+    sendr = (tx, t) => {
+      if (S.done) return;
+      if (tx.fate === "corrupt") { sNote(t, `corrupted ${tx.label} — discarded`, "warn"); return; }
+      const ack = tx.seq;
+      if (ack > seqs[S.base]) {
+        const before = S.base;
+        while (S.base < M && endOf(S.base) <= ack) { S.acked.add(S.base); S.base += 1; }
+        dupCount = 0;
+        sNote(t, `${tx.label}: bytes up to ${ack - 1} confirmed → SendBase = ${ack}${S.base - before > 1 ? " (cumulative)" : ""}`, "good");
+        snap(t);
+        if (S.base >= M) { S.done = true; S.doneAt = t; stopTimer("only"); sNote(t, "all bytes acknowledged", "good"); return; }
+        if (S.base < S.next) startTimer(t); else stopTimer("only");
+        trySend(t);
+      } else {
+        dupCount += 1;
+        sNote(t, `duplicate ${tx.label} (#${dupCount})`, "warn");
+        if (dupCount === 3 && fastRetransmit) {
+          sendSeg(t, S.base, `fast retransmit Seq=${seqs[S.base]} after 3 duplicate ACKs`);
+        }
+      }
+    };
+    let rcvNext = isn;
+    const buffered = new Set();
+    recv = (tx, t) => {
+      if (tx.fate === "corrupt") { rNote(t, `corrupted ${tx.label} — checksum fails, discarded`, "warn"); return; }
+      const i = tx.msg;
+      if (tx.seq === rcvNext) {
+        deliver(t, i);
+        rcvNext = endOf(i);
+        R.base = i + 1;
+        while ([...buffered].some(k => seqs[k] === rcvNext)) {
+          const k = [...buffered].find(x => seqs[x] === rcvNext);
+          buffered.delete(k);
+          R.buffered.delete(k);
+          deliver(t, k);
+          rcvNext = endOf(k);
+          R.base = k + 1;
+        }
+      } else if (tx.seq > rcvNext) {
+        if (!buffered.has(i)) { buffered.add(i); R.buffered.add(i); }
+        rNote(t, `${tx.label} arrived early (expected ${rcvNext}) — buffer it, ACK=${rcvNext} again`, "warn");
+      } else {
+        rNote(t, `${tx.label} already received — ACK=${rcvNext}`, "info");
+      }
+      transmit("R", "ack", i, rcvNext, t, `ACK=${rcvNext}`);
+      snap(t);
+    };
+    onTimeout = t => {
+      sendSeg(t, S.base, `timeout! resend Seq=${seqs[S.base]} (only the oldest unACKed segment)`);
+      dupCount = 0;
+      startTimer(t);
+    };
+    trySend(0);
   } else {
     return { error:`Unknown protocol ${protocol}` };
   }
 
-  // ── run ──
+  // ── run (keeps going after completion so in-flight packets and late ACKs are shown) ──
   let now = 0;
   snap(0);
   while (queue.length) {
@@ -267,7 +344,6 @@ export function simulate({ protocol, packets = DEFAULTS.packets, window = DEFAUL
     if (ev.t > tMax) break;
     now = ev.t;
     ev.fn(ev.t);
-    if (S.done) break;
   }
   if (!S.done) {
     S.stuck = true;
@@ -280,14 +356,17 @@ export function simulate({ protocol, packets = DEFAULTS.packets, window = DEFAUL
   const retrans = dataTx.filter(x => x.attempt > 1).length;
   const dups = deliveries.filter(d => d.dup).length;
   const end = Math.max(now, ...txs.map(x => x.t1), 0);
+  const boxLabels = segSizes
+    ? segSizes.map((_, i) => segSizes.slice(0, i).reduce((a, b) => a + b, isn))
+    : null;
   return {
-    protocol, M, N, timeout, D, dt,
+    protocol, M, N, timeout, D, dt, boxLabels, sizes:segSizes,
     txs, sNotes, rNotes, deliveries, snaps,
     done:S.done, stuck:S.stuck, end,
     stats: {
       sent: dataTx.length, retrans, dups,
       delivered: new Set(deliveries.map(d => d.msg)).size,
-      finish: S.done ? Math.max(...txs.filter(x => x.from === "R").map(x => x.t1), 0) : null,
+      finish: S.done ? S.doneAt : null,
       // Kurose's sender utilization: fraction of time the sender is busy sending
       utilization: Math.min(1, (N * dt) / (dt + 2 * D)),
     },
@@ -313,4 +392,90 @@ export const SCENARIOS = [
   { id:"r30-early", protocol:"rdt30", name:"rdt3.0: premature timeout", faults:{}, timeout:2.1 },
   { id:"gbn-loss", protocol:"gbn", name:"Go-Back-N in action: pkt2 lost", faults:{ "d2#1":"lost" }, packets:8, window:4 },
   { id:"sr-loss", protocol:"sr", name:"Selective Repeat in action: pkt2 lost", faults:{ "d2#1":"lost" }, packets:8, window:4 },
+  { id:"tcp-lostack", protocol:"tcp", name:"TCP: lost ACK scenario", sizes:[8], isn:92, window:1, faults:{ "a0#1":"lost" } },
+  { id:"tcp-early", protocol:"tcp", name:"TCP: premature timeout", sizes:[8, 20], isn:92, window:2, timeout:2.2, faults:{} },
+  { id:"tcp-cumulative", protocol:"tcp", name:"TCP: cumulative ACK covers a lost ACK", sizes:[8, 20], isn:92, window:2, faults:{ "a0#1":"lost" } },
+  { id:"tcp-fast", protocol:"tcp", name:"TCP fast retransmit (3 duplicate ACKs)", sizes:[8, 20, 20, 20, 20], isn:92, window:5, timeout:6, faults:{ "d1#1":"lost" } },
+  { id:"tcp-ex", protocol:"tcp", name:"Exercise: SEQ 300 lost (100-byte segments)", sizes:[100, 100, 100, 100, 100], isn:100, window:5, faults:{ "d2#1":"lost" } },
 ];
+
+// ── TCP RTT estimation (Kurose §3.5.3) ──
+// DevRTT uses the EstimatedRTT from *before* this sample, matching the lecture's worked answer.
+export function rttEstimate(est0, dev0, samples, alpha = 0.125, beta = 0.25) {
+  let est = est0, dev = dev0;
+  return samples.map(sample => {
+    const newEst = (1 - alpha) * est + alpha * sample;
+    const newDev = (1 - beta) * dev + beta * Math.abs(sample - est);
+    const row = { sample, prevEst:est, prevDev:dev, est:newEst, dev:newDev, timeout:newEst + 4 * newDev };
+    est = newEst; dev = newDev;
+    return row;
+  });
+}
+
+// ── TCP congestion control, one row per transmission round (RTT), cwnd in MSS ──
+// events: { [round]: "dup" | "timeout" } — the loss is detected at the end of that round.
+export function congestion({ rounds = 20, ssthresh = 8, variant = "reno", events = {} }) {
+  const rows = [];
+  let cwnd = 1, th = ssthresh, phase = "slow start";
+  for (let r = 1; r <= rounds; r++) {
+    const ev = events[r] || null;
+    rows.push({ round:r, cwnd, ssthresh:th, phase, event:ev });
+    if (ev === "timeout" || (ev === "dup" && variant === "tahoe")) {
+      th = cwnd / 2; cwnd = 1; phase = "slow start";
+    } else if (ev === "dup") {
+      th = cwnd / 2; cwnd = th + 3; phase = "fast recovery";
+    } else if (phase === "slow start") {
+      cwnd = Math.min(cwnd * 2, Math.max(th, cwnd + 1));
+      if (cwnd >= th) phase = "congestion avoidance";
+    } else {
+      cwnd += 1; phase = "congestion avoidance";
+    }
+  }
+  return rows;
+}
+
+// ── Internet checksum (one's-complement sum of 16-bit words) ──
+export function parseWord(s) {
+  const t = String(s ?? "").trim().replace(/[\s_]/g, "");
+  if (/^0x[0-9a-f]{1,4}$/i.test(t)) return parseInt(t.slice(2), 16);
+  if (/^[01]{16}$/.test(t)) return parseInt(t, 2);
+  return null;
+}
+export const bin16 = n => n.toString(2).padStart(16, "0").replace(/(\d{4})(?=\d)/g, "$1 ");
+export function checksum(words) {
+  const vals = words.map(parseWord);
+  if (!vals.length || vals.some(v => v === null)) return { error:"Enter 16-bit words in binary (16 digits) or hex (0x…)" };
+  const steps = [];
+  let sum = vals[0];
+  for (let i = 1; i < vals.length; i++) {
+    const raw = sum + vals[i];
+    const wrapped = (raw & 0xffff) + (raw >> 16);
+    steps.push({ a:sum, b:vals[i], raw, carry:raw > 0xffff, wrapped });
+    sum = wrapped;
+  }
+  const result = (~sum) & 0xffff;
+  return { vals, steps, sum, checksum:result, verify:((sum + result) & 0xffff) === 0xffff };
+}
+
+// ── TCP flow control, one row per round trip ──
+// The sender sends min(rwnd, remaining) bytes; at rwnd = 0 it sends a 1-byte probe.
+export function flowControl({ file = 4096, buffer = 3072, reads = { 3:2048 }, rounds = 8 }) {
+  const rows = [];
+  let remaining = file, buffered = 0, rwnd = buffer, appGot = 0;
+  for (let r = 1; r <= rounds && (remaining > 0 || buffered > 0); r++) {
+    const read = Math.min(reads[r] || 0, buffered);
+    buffered -= read; appGot += read;
+    let sent = 0, probe = false, accepted = 0;
+    if (remaining > 0) {
+      if (rwnd > 0) sent = Math.min(rwnd, remaining);
+      else { sent = 1; probe = true; }
+      accepted = Math.min(sent, buffer - buffered);
+      buffered += accepted; remaining -= accepted;
+    }
+    const before = rwnd;
+    rwnd = buffer - buffered;
+    rows.push({ round:r, rwndKnown:before, read, sent, probe, accepted, rejected:sent - accepted, buffered, rwnd, remaining, appGot });
+    if (remaining === 0 && !Object.keys(reads).some(k => Number(k) > r)) break;
+  }
+  return rows;
+}
