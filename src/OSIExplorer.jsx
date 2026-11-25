@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import "./osi.css";
 import TopologyBuilder from "./TopologyBuilder.jsx";
 import TransportLab from "./TransportLab.jsx";
+import Quiz from "./Quiz.jsx";
 
 // ── Subnet math ───────────────────────────────────────────────────────────────
 function ipToNum(ip) { return ip.split(".").reduce((a,o)=>(a<<8)+parseInt(o),0)>>>0; }
@@ -1059,7 +1060,7 @@ export default function OSIExplorer() {
   const [step,     setStep]     = useState(0);
   const [playing,  setPlaying]  = useState(false);
   const [selDev,   setSelDev]   = useState(null);
-  const [mode,     setMode]     = useState(() => ({ "#builder":"builder", "#transport":"transport" })[window.location.hash] || "walk");
+  const [mode,     setMode]     = useState(() => ({ "#builder":"builder", "#transport":"transport", "#quiz":"quiz" })[window.location.hash] || "walk");
   const timer = useRef(null);
   const modeRef = useRef(mode);
   useEffect(() => { modeRef.current = mode; }, [mode]);
@@ -1136,7 +1137,9 @@ export default function OSIExplorer() {
               ? "Trace an HTTP connection from PC to PC through every layer"
               : mode==="builder"
                 ? "Build your own network and watch a packet find its way"
-                : "Watch reliable data transfer recover from lost and corrupted packets"}</p>
+                : mode==="transport"
+                  ? "Watch reliable data transfer recover from lost and corrupted packets"
+                  : "Exam-style practice questions with the working shown"}</p>
           </div>
         </div>
         <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
@@ -1144,6 +1147,7 @@ export default function OSIExplorer() {
             <button role="tab" aria-selected={mode==="walk"} className={`osi-mode${mode==="walk"?" on":""}`} onClick={()=>switchMode("walk")}>Walkthrough</button>
             <button role="tab" aria-selected={mode==="builder"} className={`osi-mode${mode==="builder"?" on":""}`} onClick={()=>switchMode("builder")}>Topology builder</button>
             <button role="tab" aria-selected={mode==="transport"} className={`osi-mode${mode==="transport"?" on":""}`} onClick={()=>switchMode("transport")}>Transport lab</button>
+            <button role="tab" aria-selected={mode==="quiz"} className={`osi-mode${mode==="quiz"?" on":""}`} onClick={()=>switchMode("quiz")}>Quiz</button>
           </div>
           {mode==="walk" && (
             <button className={`osi-cfg-btn${showCfg?" osi-cfg-btn-active":""}`}
@@ -1157,6 +1161,7 @@ export default function OSIExplorer() {
 
       {mode==="builder" && <main className="osi-main"><TopologyBuilder/></main>}
       {mode==="transport" && <main className="osi-main"><TransportLab/></main>}
+      {mode==="quiz" && <main className="osi-main"><Quiz/></main>}
 
       {mode==="walk" && showCfg && (
         <NetworkConfigPanel
